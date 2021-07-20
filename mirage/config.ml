@@ -161,7 +161,7 @@ let stack = generic_stackv4v6 default_network
 
 let mimic = mimic ~kind:`Rsa ~seed:ssh_seed ~auth:ssh_auth stack random mclock time
 
-let packages = [ package "contruno" ]
+let packages = [ package "contruno" ~pin:"git+https://github.com/dinosaure/contruno.git" ]
 
 let () =
   register "contruno"
