@@ -18,6 +18,16 @@ and send socket pos pass =
   else Lwt_unix.write_string socket pass pos (String.length pass - pos) >>= fun len ->
        send socket (pos + len) pass
 
+let ssh_edn, ssh_protocol = Mimic.register ~name:"ssh" (module SSH)
+
+let ctx =
+  let k0 scheme ssh_user host path capabilities = match scheme, host with
+    | `SSH, `Domain domain_name -> Lwt.return_some (ssh_user, domain_name, path, capabilities)
+    | _ -> Lwt.return_none in
+  let open Smart_git in
+  Mimic.fold ssh_edn Mimic.Fun.[ req git_scheme; req git_ssh_user; req git_host; req git_path; req git_capabilities; ] ~k:k0
+    Git_unix.ctx
+
 let upgrade ~pass target =
   Lwt.catch begin fun () -> upgrade ~pass target >>= fun () -> Lwt.return_ok () end
   @@ function
@@ -28,9 +38,16 @@ let upgrade ~pass target =
 let ( >>? ) = Lwt_result.bind
 
 let add hostname cert pkey ip alpn remote ~pass target =
-  let config = Irmin_git.config "local" in
+  (* XXX(dinosaure): hmmmhmmm, we should not do that. *)
+  let tmp = R.failwith_error_msg (Bos.OS.Dir.tmp "git-%s") in
+  let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git")) in
+  let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "refs")) in
+  let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "tmp")) in
+  let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "objects")) in
+  let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "objects" / "pack")) in
+  let config = Irmin_git.config (Fpath.to_string tmp) in
   Store.Repo.v config >>= Store.master >>= fun store ->
-  let remote = Store.remote ~ctx:Git_unix.ctx remote in
+  let remote = Store.remote ~ctx remote in
   Sync.pull store remote `Set >|= R.reword_error (fun err -> `Pull err) >>? fun _ ->
   let v = { Certificate.cert; pkey; ip; alpn; } in
   let info () =
@@ -38,7 +55,8 @@ let add hostname cert pkey ip alpn remote ~pass target =
     and mesg = Fmt.str "New certificate for %a added" Domain_name.pp hostname in
     Irmin.Info.v ~date ~author:"contruno.add" mesg in
   Store.set ~info store [ Domain_name.to_string hostname ] v
-  >|= R.reword_error (fun err -> `Push err) >>? fun _ ->
+  >|= R.reword_error (fun err -> `Set err) >>? fun _ ->
+  Sync.push store remote >|= R.reword_error (fun err -> `Push err) >>? fun _ ->
   upgrade ~pass target
 
 let pp_sockaddr ppf = function
@@ -48,7 +66,8 @@ let pp_sockaddr ppf = function
 let run _ hostname (_, cert) (_, pkey) ip alpn remote pass target =
   match Lwt_main.run (add hostname cert pkey ip alpn remote ~pass target) with
   | Ok () -> `Ok 0
-  | Error (`Pull _err) -> `Error (false, "Unreachable Git repository.")
+  | Error (`Pull _err) -> `Error (false, Fmt.str "Unreachable Git repository.")
+  | Error (`Set _err) -> `Error (false, Fmt.str "Unable to locally set the store.")
   | Error (`Push _err) -> `Error (false, Fmt.str "Unallowed to push to %s." remote)
   | Error (`Unix_error _) -> `Error (false, Fmt.str "Impossible to upgrade the unikernel %s." (Unix.string_of_inet_addr target))
 
