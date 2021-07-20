@@ -1,0 +1,17 @@
+(library
+ (name certif)
+ (public_name contruno.certif)
+ (modules certif)
+ (libraries ca-certs-nss dns-client.mirage paf.mirage paf.le mirage-stack mirage-clock mirage-time mirage-random))
+
+(library
+ (name value)
+ (public_name contruno.value)
+ (modules value)
+ (libraries irmin ipaddr x509))
+
+(library
+ (name contruno)
+ (public_name contruno)
+ (modules contruno)
+ (libraries certif value irmin-mirage-git art ipaddr x509 irmin))

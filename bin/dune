@@ -1,0 +1,4 @@
+(executable
+ (name add)
+ (public_name contruno.add)
+ (libraries value irmin-unix))
