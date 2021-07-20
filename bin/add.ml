@@ -27,9 +27,9 @@ let upgrade ~pass target =
 
 let ( >>? ) = Lwt_result.bind
 
-let add hostname cert pkey ip alpn remote head ~pass target =
+let add hostname cert pkey ip alpn remote ~pass target =
   let config = Irmin_git.config "local" in
-  Store.Repo.v config >>= fun t -> Store.of_branch t (Git.Reference.to_string head) >>= fun store ->
+  Store.Repo.v config >>= Store.master >>= fun store ->
   let remote = Store.remote ~ctx:Git_unix.ctx remote in
   Sync.pull store remote `Set >|= R.reword_error (fun err -> `Pull err) >>? fun _ ->
   let v = { Certificate.cert; pkey; ip; alpn; } in
@@ -45,8 +45,8 @@ let pp_sockaddr ppf = function
   | Unix.ADDR_UNIX socket -> Fmt.pf ppf "%s" socket
   | Unix.ADDR_INET (inet_addr, port) -> Fmt.pf ppf "%s:%d" (Unix.string_of_inet_addr inet_addr) port
 
-let run _ hostname (_, cert) (_, pkey) ip alpn remote head pass target =
-  match Lwt_main.run (add hostname cert pkey ip alpn remote head ~pass target) with
+let run _ hostname (_, cert) (_, pkey) ip alpn remote pass target =
+  match Lwt_main.run (add hostname cert pkey ip alpn remote ~pass target) with
   | Ok () -> `Ok 0
   | Error (`Pull _err) -> `Error (false, "Unreachable Git repository.")
   | Error (`Push _err) -> `Error (false, Fmt.str "Unallowed to push to %s." remote)
@@ -108,8 +108,6 @@ let remote =
     | Error _ as err -> err in
   Arg.conv (parser, Fmt.string)
 
-let reference = Arg.conv (Git.Reference.of_string, Git.Reference.pp)
-
 let inet_addr =
   let parser str = match Unix.inet_addr_of_string str with
     | v -> Ok v
@@ -140,10 +138,6 @@ let alpn =
 let remote =
   let doc = "The Git repository." in
   Arg.(required & opt (some remote) None & info [ "r"; "remote" ] ~doc)
-
-let reference =
-  let doc = "The remote reference of the Git repository." in
-  Arg.(value & opt reference Git.Reference.master & info [ "reference" ] ~doc)
 
 let pass =
   let doc = "The passphrase to upgrade the unikernel." in
@@ -192,7 +186,7 @@ let cmd =
     ; `P "$(t,name) is a simple tool to push a certificate with its private key to the Git repository used by \
           the $(i,contruno) unikernel. Then, the tool will send a notification to the unikernel to re-synchronize it \
           with the Git repository." ] in
-  Term.(ret (const run $ setup_logs $ hostname $ certificate $ private_key $ ip $ alpn $ remote $ reference $ pass $ target)),
+  Term.(ret (const run $ setup_logs $ hostname $ certificate $ private_key $ ip $ alpn $ remote $ pass $ target)),
   Term.info "add" ~doc ~man
 
 let () = Term.(exit_status @@ eval cmd)
