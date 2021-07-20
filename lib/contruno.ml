@@ -95,6 +95,8 @@ module Make0
       (next_read_operation t :> [ `Close | `Read | `Yield ])
   end
 
+  module L = (val (Logs.src_log (Logs.Src.create "http-handler")))
+
   let transmit
     : [ `read ] Httpaf.Body.t -> [ `write ] Httpaf.Body.t -> unit
     = fun src dst ->
@@ -112,8 +114,9 @@ module Make0
 
   let http_1_1_error_handler _err = ()
 
-  let http_1_1_request_handler stackv4v6 tree reqd =
+  let http_1_1_request_handler stackv4v6 tree peer reqd =
     let request = Httpaf.Reqd.request reqd in
+    L.debug (fun m -> m "An HTTP/1.1 connection (from %s) with: @[<hov>%a@]." peer Httpaf.Request.pp_hum request) ;
     let certificate =
       let open Rresult.R in
       Httpaf.Headers.get request.Httpaf.Request.headers "Host"
@@ -132,6 +135,7 @@ module Make0
     | Error (`Host_does_not_exist _) -> assert false
     | Error `Target_does_not_handle_HTTP_1_1 -> assert false
     | Ok { Certificate.ip; _ } ->
+      L.debug (fun m -> m "Bridge %s with %a:80." peer Ipaddr.pp ip) ;
       Lwt.async @@ fun () ->
       Stack.TCP.create_connection stackv4v6 (ip, 80) >>= function
       | Error _ -> assert false
@@ -141,8 +145,6 @@ module Make0
           ~response_handler:(http_1_1_response_handler reqd) request in
         transmit (Httpaf.Reqd.request_body reqd) dst ;
         Paf.run (module Httpaf_client_connection) ~sleep:Time.sleep_ns conn (R.T flow)
-
-  module L = (val (Logs.src_log (Logs.Src.create "h2")))
 
   let transmit
     : [ `read ] H2.Body.t -> [ `write ] H2.Body.t -> unit
@@ -410,8 +412,8 @@ module Make
 
   let request_handler
     : Stack.TCP.t -> Certificate.t Art.t -> string -> [ `write ] Alpn.reqd_handler -> unit
-    = fun stackv4v6 tree _peer reqd -> match reqd with
-    | Alpn.(Reqd_handler (HTTP_1_1, reqd)) -> http_1_1_request_handler stackv4v6 tree reqd
+    = fun stackv4v6 tree peer reqd -> match reqd with
+    | Alpn.(Reqd_handler (HTTP_1_1, reqd)) -> http_1_1_request_handler stackv4v6 tree peer reqd
     | Alpn.(Reqd_handler (HTTP_2_0, reqd)) -> http_2_0_request_handler stackv4v6 tree reqd
 
   type stack = Paf.t
