@@ -154,10 +154,10 @@ $ screen
 $ solo5-hvt --net:service=tap100 contruno.hvt -- \
   --ipv4=10.0.0.2/24 \
   --ipv4-gateway=10.0.0.1 \
-  --remote git@10.0.0.1:certificates.git
-  --pass foobar
-  --production false
-  --ssh-ssh U01hpCOJ/MHLri7YBi7NBXqZ8TXDkVyXSb7CdGQr
+  --remote git@10.0.0.1:certificates.git \
+  --pass foo \
+  --production false \
+  --ssh-ssh U01hpCOJ/MHLri7YBi7NBXqZ8TXDkVyXSb7CdGQr \
 ```
 
 And, voilà!
