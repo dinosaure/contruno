@@ -83,16 +83,16 @@ let mimic_ssh_impl ~kind ~seed ~auth stackv4v6 mimic_git mclock =
 (* TODO(dinosaure): user-defined nameserver and port. *)
 
 let mimic_dns_conf =
-  let packages = [ package "git-mirage" ~sublibs:[ "dns" ] ] in
+  let packages = [ package "git-mirage" ~min:"3.6.0" ~sublibs:[ "dns" ] ] in
   impl @@ object
        inherit base_configurable
-       method ty = random @-> mclock @-> time @-> stackv4v6 @-> mimic @-> mimic
+       method ty = random @-> mclock @-> pclock @-> time @-> stackv4v6 @-> mimic @-> mimic
        method module_name = "Git_mirage_dns.Make"
        method! packages = Key.pure packages
        method name = "dns_ctx"
        method! connect _ modname =
          function
-         | [ _; _; _; stack; tcp_ctx ] ->
+         | [ _; _; _; _; stack; tcp_ctx ] ->
              Fmt.str
                {ocaml|let dns_ctx00 = Mimic.merge %s %s.ctx in
                       let dns_ctx01 = %s.with_dns %s dns_ctx00 in
@@ -147,9 +147,9 @@ let contruno =
           ; Key.abstract certificate_seed ]
     (random @-> time @-> mclock @-> pclock @-> stackv4v6 @-> mimic @-> job)
 
-let mimic ~kind ~seed ~auth stackv4v6 random mclock time =
+let mimic ~kind ~seed ~auth stackv4v6 random mclock pclock time =
   let mtcp = mimic_tcp_impl stackv4v6 in
-  let mdns = mimic_dns_impl random mclock time stackv4v6 mtcp in
+  let mdns = mimic_dns_impl random mclock pclock time stackv4v6 mtcp in
   let mssh = mimic_ssh_impl ~kind ~seed ~auth stackv4v6 mtcp mclock in
   merge mssh mdns
 
@@ -159,11 +159,12 @@ let pclock = default_posix_clock
 let time = default_time
 let stack = generic_stackv4v6 default_network
 
-let mimic = mimic ~kind:`Rsa ~seed:ssh_seed ~auth:ssh_auth stack random mclock time
+let mimic = mimic ~kind:`Rsa ~seed:ssh_seed ~auth:ssh_auth stack random mclock pclock time
 
 let packages =
   [ package "contruno" ~pin:"git+https://github.com/dinosaure/contruno.git"
-  ; package "paf" ~pin:"git+https://github.com/dinosaure/paf-le-chien.git" ]
+  ; package "paf"
+  ; package "paf-le"
 
 let () =
   register "contruno"

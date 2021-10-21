@@ -10,7 +10,7 @@ module Make
   (Pclock : Mirage_clock.PCLOCK)
   (Stack : Mirage_stack.V4V6)
 = struct
-  module DNS = Dns_client_mirage.Make (Random) (Time) (Mclock) (Stack)
+  module DNS = Dns_client_mirage.Make (Random) (Time) (Mclock) (Pclock) (Stack)
   module Let = LE.Make (Time) (Stack)
   module Nss = Ca_certs_nss.Make (Pclock)
   module Paf = Paf_mirage.Make (Time) (Stack)
@@ -56,8 +56,12 @@ module Make
     let cfg =
       { Let.hostname
       ; Let.email= email
-      ; Let.seed= account_seed
-      ; Let.certificate_seed } in
+      ; Let.account_seed= account_seed
+      ; Let.account_key_type= `ED25519
+      ; Let.account_key_bits= Some 4096
+      ; Let.certificate_seed
+      ; Let.certificate_key_type= `ED25519
+      ; Let.certificate_key_bits= Some 4096 } in
     let ctx = Let.ctx
       ~gethostbyname ~authenticator
       (DNS.create stackv4v6) stackv4v6 in
