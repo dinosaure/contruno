@@ -32,7 +32,7 @@ let upgrade ~pass target =
   Lwt.catch begin fun () -> upgrade ~pass target >>= fun () -> Lwt.return_ok () end
   @@ function
   | Unix.Unix_error (err, f, arg) ->
-    Lwt.return_error (`Unix_error (Fmt.strf "%s(%s): %s" f arg (Unix.error_message err)))
+    Lwt.return_error (`Unix_error (Fmt.str "%s(%s): %s" f arg (Unix.error_message err)))
   | exn -> raise exn
 
 let ( >>? ) = Lwt_result.bind
