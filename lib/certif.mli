@@ -3,7 +3,7 @@ module Make
   (Time : Mirage_time.S)
   (Mclock : Mirage_clock.MCLOCK)
   (Pclock : Mirage_clock.PCLOCK)
-  (Stack : Mirage_stack.V4V6)
+  (Stack : Tcpip.Stack.V4V6)
 : sig
   val get_certificate_for
     :  Lwt_mutex.t

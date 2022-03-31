@@ -1,5 +1,5 @@
 opam-version: "2.0"
-name:         "contruno"
+name:         "contruno-bin"
 maintainer:   "Romain Calascibetta <romain.calascibetta@gmail.com>"
 authors:      "Romain Calascibetta <romain.calascibetta@gmail.com>"
 homepage:     "https://github.com/dinosaure/contruno"
@@ -8,23 +8,13 @@ dev-repo:     "git+https://github.com/dinosaure/contruno.git"
 doc:          "https://dinosaure.github.io/contruno/"
 license:      "MIT"
 synopsis:     "Reverse TLS proxy"
-description: """An unikernel as a reverse TLS proxy service"""
+description: """A simple tool to populate the contruno database"""
 
 build: [ "dune" "build" "-p" name "-j" jobs ]
 run-test: [ "dune" "runtest" "-p" name "-j" jobs ]
 
 depends: [
   "dune"             {>= "2.9.0"}
-  "art"
-  "ca-certs-nss"
-  "dns-client"
-  "ipaddr"
-  "irmin-mirage-git" {>= "2.10.2"}
-  "mirage-clock"
-  "mirage-random"
-  "mirage-stack"
-  "mirage-time"
-  "paf"              {>= "0.0.8"}
-  "paf-le"           {>= "0.0.8"}
-  "x509"
+  "irmin-unix"       {>= "2.10.2"}
+  "contruno"         {= version}
 ]

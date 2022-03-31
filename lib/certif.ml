@@ -8,7 +8,7 @@ module Make
   (Time : Mirage_time.S)
   (Mclock : Mirage_clock.MCLOCK)
   (Pclock : Mirage_clock.PCLOCK)
-  (Stack : Mirage_stack.V4V6)
+  (Stack : Tcpip.Stack.V4V6)
 = struct
   module DNS = Dns_client_mirage.Make (Random) (Time) (Mclock) (Pclock) (Stack)
   module Let = LE.Make (Time) (Stack)
@@ -82,8 +82,9 @@ module Make
           ?email ?account_seed ?certificate_seed
           stackv4v6 ->
     Lwt_mutex.with_lock http @@ begin fun () ->
-      Paf.init ~port:80 stackv4v6 >>= fun t ->
-      let service = Paf.http_service ~error_handler Let.request_handler in
+      Paf.init ~port:80 (Stack.tcp stackv4v6) >>= fun t ->
+      let request_handler _flow = Let.request_handler in
+      let service = Paf.http_service ~error_handler request_handler in
       Lwt_switch.with_switch @@ fun stop ->
       let `Initialized th = Paf.serve ~stop service t in
       Lwt.both th

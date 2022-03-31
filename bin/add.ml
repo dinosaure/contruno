@@ -18,15 +18,94 @@ and send socket pos pass =
   else Lwt_unix.write_string socket pass pos (String.length pass - pos) >>= fun len ->
        send socket (pos + len) pass
 
+module SSH = struct
+  type error = Unix.error * string * string
+  type write_error = [ `Closed | `Error of Unix.error * string * string ]
+
+  let pp_error ppf (err, f, v) =
+    Fmt.pf ppf "%s(%s): %s" f v (Unix.error_message err)
+
+  let pp_write_error ppf = function
+    | `Closed -> Fmt.pf ppf "Connection closed by peer"
+    | `Error (err, f, v) -> Fmt.pf ppf "%s(%s): %s" f v (Unix.error_message err)
+
+  type flow = { ic : in_channel; oc : out_channel }
+
+  type endpoint = {
+    user : string;
+    path : string;
+    host : Unix.inet_addr;
+    port : int;
+  }
+
+  let pp_inet_addr ppf inet_addr =
+    Fmt.string ppf (Unix.string_of_inet_addr inet_addr)
+
+  let connect { user; path; host; port } =
+    let edn = Fmt.str "%s@%a" user pp_inet_addr host in
+    let cmd = Fmt.str {sh|git-upload-pack '%s'|sh} path in
+    let cmd = Fmt.str "ssh -p %d %s %a" port edn Fmt.(quote string) cmd in
+    try
+      let ic, oc = Unix.open_process cmd in
+      Lwt.return_ok { ic; oc }
+    with Unix.Unix_error (err, f, v) -> Lwt.return_error (`Error (err, f, v))
+
+  let read t =
+    let tmp = Bytes.create 0x1000 in
+    try
+      let len = input t.ic tmp 0 0x1000 in
+      if len = 0
+      then Lwt.return_ok `Eof
+      else Lwt.return_ok (`Data (Cstruct.of_bytes tmp ~off:0 ~len))
+    with Unix.Unix_error (err, f, v) -> Lwt.return_error (err, f, v)
+
+  let write t cs =
+    let str = Cstruct.to_string cs in
+    try
+      output_string t.oc str ;
+      flush t.oc ;
+      Lwt.return_ok ()
+    with Unix.Unix_error (err, f, v) -> Lwt.return_error (`Error (err, f, v))
+
+  let writev t css =
+    let rec go t = function
+      | [] -> Lwt.return_ok ()
+      | x :: r -> (
+          write t x >>= function
+          | Ok () -> go t r
+          | Error _ as err -> Lwt.return err) in
+    go t css
+
+  let close t =
+    close_in t.ic ;
+    close_out t.oc ;
+    Lwt.return_unit
+end
+
 let ssh_edn, ssh_protocol = Mimic.register ~name:"ssh" (module SSH)
 
-let ctx =
-  let k0 scheme ssh_user host path capabilities = match scheme, host with
-    | `SSH, `Domain domain_name -> Lwt.return_some (ssh_user, domain_name, path, capabilities)
+let unix_ctx_with_ssh () =
+  Git_unix.ctx (Happy_eyeballs_lwt.create ()) >|= fun ctx ->
+  let open Mimic in
+  let k0 scheme user path host port =
+    match (scheme, Unix.gethostbyname host) with
+    | `SSH, { Unix.h_addr_list; _ } when Array.length h_addr_list > 0 ->
+        Lwt.return_some { SSH.user; path; host = h_addr_list.(0); port }
     | _ -> Lwt.return_none in
-  let open Smart_git in
-  Mimic.fold ssh_edn Mimic.Fun.[ req git_scheme; req git_ssh_user; req git_host; req git_path; req git_capabilities; ] ~k:k0
-    Git_unix.ctx
+  ctx
+  |> Mimic.fold Smart_git.git_transmission
+       Fun.[ req Smart_git.git_scheme ]
+       ~k:(function `SSH -> Lwt.return_some `Exec | _ -> Lwt.return_none)
+  |> Mimic.fold ssh_edn
+       Fun.
+         [
+           req Smart_git.git_scheme;
+           req Smart_git.git_ssh_user;
+           req Smart_git.git_path;
+           req Smart_git.git_hostname;
+           dft Smart_git.git_port 22;
+         ]
+       ~k:k0
 
 let upgrade ~pass target =
   Lwt.catch begin fun () -> upgrade ~pass target >>= fun () -> Lwt.return_ok () end
@@ -47,6 +126,7 @@ let add hostname cert pkey ip alpn remote ~pass target =
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "objects" / "pack")) in
   let config = Irmin_git.config (Fpath.to_string tmp) in
   Store.Repo.v config >>= Store.master >>= fun store ->
+  unix_ctx_with_ssh () >>= fun ctx ->
   let remote = Store.remote ~ctx remote in
   Sync.pull store remote `Set >|= R.reword_error (fun err -> `Pull err) >>? fun _ ->
   let v = { Certificate.cert; pkey; ip; alpn; } in

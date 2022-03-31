@@ -74,7 +74,7 @@ type cfg =
 
 module Make0
   (Time : Mirage_time.S)
-  (Stack : Mirage_stack.V4V6)
+  (Stack : Tcpip.Stack.V4V6)
 = struct
   module TCP = struct
     include Stack.TCP
@@ -212,7 +212,7 @@ module Make
   (Time : Mirage_time.S)
   (Mclock : Mirage_clock.MCLOCK)
   (Pclock : Mirage_clock.PCLOCK)
-  (Stack : Mirage_stack.V4V6)
+  (Stack : Tcpip.Stack.V4V6)
 = struct
   module Log = (val (Logs.src_log (Logs.Src.create "contruno")))
   module Paf = Paf_mirage.Make (Time) (Stack)
@@ -411,14 +411,14 @@ module Make
   open Lwt.Infix
 
   let request_handler
-    : Stack.TCP.t -> Certificate.t Art.t -> string -> [ `write ] Alpn.reqd_handler -> unit
+    : Stack.TCP.t -> Certificate.t Art.t -> string -> Alpn.reqd -> unit
     = fun stackv4v6 tree peer reqd -> match reqd with
-    | Alpn.(Reqd_handler (HTTP_1_1, reqd)) -> http_1_1_request_handler stackv4v6 tree peer reqd
-    | Alpn.(Reqd_handler (HTTP_2_0, reqd)) -> http_2_0_request_handler stackv4v6 tree reqd
+    | Alpn.(Reqd_HTTP_1_1 reqd) -> http_1_1_request_handler stackv4v6 tree peer reqd
+    | Alpn.(Reqd_HTTP_2_0 reqd) -> http_2_0_request_handler stackv4v6 tree reqd
 
   type stack = Paf.t
 
-  let init = Paf.init
+  let init ~port stackv4v6 = Paf.init ~port (Stack.tcp stackv4v6)
 
   let alpn_protocols tree =
     let http_1_1 = ref false and h2 = ref false in
@@ -481,5 +481,5 @@ module Make
       match run with
       | true -> reload ~ctx ~remote tree
       | false -> Lwt.return_unit in
-    Stack.listen_tcp stackv4v6 ~port:9418 listen
+    Stack.TCP.listen (Stack.tcp stackv4v6) ~port:9418 listen
 end
