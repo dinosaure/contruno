@@ -3,6 +3,7 @@
  (public_name contruno.certif)
  (modules certif)
  (libraries
+  rresult
   ca-certs-nss
   dns-client.mirage
   paf.mirage
@@ -16,7 +17,7 @@
  (name value)
  (public_name contruno.value)
  (modules value)
- (libraries irmin ipaddr x509))
+ (libraries rresult irmin ipaddr x509))
 
 (library
  (name contruno)

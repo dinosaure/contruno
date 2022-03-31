@@ -25,7 +25,7 @@ module Make
   (Time : Mirage_time.S)
   (Mclock : Mirage_clock.MCLOCK)
   (Pclock : Mirage_clock.PCLOCK)
-  (Stack : Mirage_stack.V4V6)
+  (Stack : Tcpip.Stack.V4V6)
 : sig
   type flow
   type endpoint = |
@@ -60,7 +60,7 @@ module Make
   val serve
     :  (Ipaddr.t * int, flow) Hashtbl.t
     -> Certificate.t Art.t
-    -> error_handler:(string -> ?request:Alpn.request -> Alpn.server_error -> (Alpn.headers -> [ `write ] Alpn.body) -> unit)
+    -> error_handler:(string -> ?request:Alpn.request -> Alpn.server_error -> (Alpn.headers -> Alpn.body) -> unit)
     -> Stack.TCP.t
     -> stack Paf.service
 
