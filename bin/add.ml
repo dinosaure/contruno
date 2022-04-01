@@ -36,14 +36,17 @@ module SSH = struct
     path : string;
     host : Unix.inet_addr;
     port : int;
+    capabilities : [ `Rd | `Wr ];
   }
 
   let pp_inet_addr ppf inet_addr =
     Fmt.string ppf (Unix.string_of_inet_addr inet_addr)
 
-  let connect { user; path; host; port } =
+  let connect { user; path; host; port; capabilities; } =
     let edn = Fmt.str "%s@%a" user pp_inet_addr host in
-    let cmd = Fmt.str {sh|git-upload-pack '%s'|sh} path in
+    let cmd = match capabilities with
+      | `Wr -> Fmt.str {sh|git-receive-pack '%s'|sh} path
+      | `Rd -> Fmt.str {sh|git-upload-pack '%s'|sh} path in
     let cmd = Fmt.str "ssh -p %d %s %a" port edn Fmt.(quote string) cmd in
     try
       let ic, oc = Unix.open_process cmd in
@@ -87,10 +90,10 @@ let ssh_edn, ssh_protocol = Mimic.register ~name:"ssh" (module SSH)
 let unix_ctx_with_ssh () =
   Git_unix.ctx (Happy_eyeballs_lwt.create ()) >|= fun ctx ->
   let open Mimic in
-  let k0 scheme user path host port =
+  let k0 scheme user path host port capabilities =
     match (scheme, Unix.gethostbyname host) with
     | `SSH, { Unix.h_addr_list; _ } when Array.length h_addr_list > 0 ->
-        Lwt.return_some { SSH.user; path; host = h_addr_list.(0); port }
+        Lwt.return_some { SSH.user; path; host = h_addr_list.(0); port; capabilities; }
     | _ -> Lwt.return_none in
   ctx
   |> Mimic.fold Smart_git.git_transmission
@@ -104,6 +107,7 @@ let unix_ctx_with_ssh () =
            req Smart_git.git_path;
            req Smart_git.git_hostname;
            dft Smart_git.git_port 22;
+           req Smart_git.git_capabilities;
          ]
        ~k:k0
 
