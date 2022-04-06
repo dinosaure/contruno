@@ -466,7 +466,7 @@ module Make
     | _ -> Lwt.return false
   and go flow pos res = Stack.TCP.read flow >>= function
     | Ok (`Data v) when pos + Cstruct.length v <= (Bytes.length res) ->
-      Cstruct.blit_to_bytes v 0 res (Cstruct.length v) (Cstruct.length v) ;
+      Cstruct.blit_to_bytes v 0 res pos (Cstruct.length v) ;
       if pos + Cstruct.length v = Bytes.length res
       then Lwt.return_ok (Bytes.unsafe_to_string res)
       else go flow (pos + Cstruct.length v) res
