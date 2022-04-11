@@ -18,7 +18,7 @@ type cfg =
   ; account_seed : string option
   ; certificate_seed : string option }
 
-val connect : string -> ctx:Mimic.ctx -> (Store.t * Irmin.remote) Lwt.t
+val connect : string -> string -> ctx:Mimic.ctx -> (Store.t * Irmin.remote) Lwt.t
 
 module Make
   (Random : Mirage_random.S)
@@ -48,6 +48,7 @@ module Make
   val initialize
     :  Lwt_mutex.t
     -> ctx:Mimic.ctx
+    -> branch:string
     -> remote:string
     -> cfg
     -> Stack.t
@@ -67,6 +68,7 @@ module Make
   val add_hook
     :  pass:string
     -> ctx:Mimic.ctx
+    -> branch:string
     -> remote:string
     -> Certificate.t Art.t
     -> Stack.t

@@ -21,9 +21,9 @@ let failwith_error_pull = function
   | Error (`Msg err) -> failwith err
   | Ok v -> v
 
-let connect remote ~ctx =
+let connect remote branch ~ctx =
   let config = Irmin_git.config "." in
-  Store.Repo.v config >>= fun repository -> Store.of_branch repository "master" >>= fun active_branch ->
+  Store.Repo.v config >>= fun repository -> Store.of_branch repository branch >>= fun active_branch ->
   Lwt.return (active_branch, Store.remote ~ctx remote)
 
 let aggregate_certificates active_branch =
@@ -41,9 +41,9 @@ let aggregate_certificates active_branch =
       | _ -> Lwt.return acc in
   Lwt_list.fold_left_s f [] lst
 
-let reload ~ctx ~remote tree =
+let reload ~ctx ~branch ~remote tree =
   let config = Irmin_git.config "." in
-  Store.Repo.v config >>= fun repository -> Store.of_branch repository "master" >>= fun active_branch ->
+  Store.Repo.v config >>= fun repository -> Store.of_branch repository branch >>= fun active_branch ->
   let remote = Store.remote ~ctx remote in
   Sync.pull active_branch remote `Set
   >|= failwith_error_pull
@@ -341,9 +341,9 @@ module Make
 
   let _tls_edn, tls_protocol = Mimic.register ~name:"tls-with-reneg" (module TLS)
 
-  let set ~ctx remote tree hostname v =
+  let set ~ctx branch remote tree hostname v =
     let config = Irmin_git.config "." in
-    Store.Repo.v config >>= fun repository -> Store.of_branch repository "master" >>= fun active_branch ->
+    Store.Repo.v config >>= fun repository -> Store.of_branch repository branch >>= fun active_branch ->
     let remote = Store.remote ~ctx remote in
     Sync.pull active_branch remote `Set
     >|= failwith_error_pull
@@ -362,9 +362,9 @@ module Make
     Art.insert tree (Art.key (Domain_name.to_string hostname)) v ;
     Lwt.return_unit
 
-  let rec create_upgrader http conns tree ~ctx remote cfg stackv4v6 (hostname : Art.key) old_certificate =
+  let rec create_upgrader http conns tree ~ctx branch remote cfg stackv4v6 (hostname : Art.key) old_certificate =
     let { production; email; account_seed; certificate_seed; } = cfg in
-    let f = upgrade_and_renegociate http conns tree ~ctx remote cfg stackv4v6 hostname old_certificate in
+    let f = upgrade_and_renegociate http conns tree ~ctx branch remote cfg stackv4v6 hostname old_certificate in
     try
       Certif.thread_for http
         (old_certificate.Certificate.cert, old_certificate.Certificate.pkey)
@@ -372,19 +372,19 @@ module Make
     with exn ->
       Log.err (fun m -> m "Got an error for %s: %S" (hostname :> string) (Printexc.to_string exn)) ;
       `Ready Lwt.return_unit
-  and upgrade_and_renegociate http conns tree ~ctx remote cfg stackv4v6 hostname old_certificate = function
+  and upgrade_and_renegociate http conns tree ~ctx branch remote cfg stackv4v6 hostname old_certificate = function
     | Ok (`Single ([ cert ], pkey)) ->
       ( try Art.remove tree hostname with _ -> () ) ;
       let v = { Certificate.cert; pkey; ip= old_certificate.Certificate.ip;
           alpn= old_certificate.Certificate.alpn; } in
       renegociation tree conns >>= fun () ->
-      set ~ctx remote tree (Domain_name.of_string_exn (hostname :> string)) v >>= fun () ->
-      let `Ready th = create_upgrader http conns tree ~ctx remote cfg stackv4v6 hostname v in th
+      set ~ctx branch remote tree (Domain_name.of_string_exn (hostname :> string)) v >>= fun () ->
+      let `Ready th = create_upgrader http conns tree ~ctx branch remote cfg stackv4v6 hostname v in th
     | _ -> assert false
 
-  let initialize http ~ctx ~remote cfg stackv4v6 =
+  let initialize http ~ctx ~branch ~remote cfg stackv4v6 =
     let config = Irmin_git.config "." in
-    Store.Repo.v config >>= fun repository -> Store.of_branch repository "master" >>= fun active_branch ->
+    Store.Repo.v config >>= fun repository -> Store.of_branch repository branch >>= fun active_branch ->
     let upstream = Store.remote ~ctx remote in
     Sync.pull active_branch upstream `Set
     >|= failwith_error_pull
@@ -394,7 +394,7 @@ module Make
     Log.debug (fun m -> m "TLS certificates sanitized.") ;
     let conns = Hashtbl.create 0x1000 in
     let f hostname v acc =
-      create_upgrader http conns tree ~ctx remote cfg stackv4v6 hostname v :: acc in
+      create_upgrader http conns tree ~ctx branch remote cfg stackv4v6 hostname v :: acc in
     let ths = Art.iter ~f [] tree in
     Lwt.return (conns, tree, ths)
 
@@ -484,12 +484,12 @@ module Make
     | Ok `Eof -> Lwt.return_error `Connection_reset_by_peer
     | Error err -> Lwt.return_error (`TCP err) 
 
-  let add_hook ~pass ~ctx ~remote tree stackv4v6 =
+  let add_hook ~pass ~ctx ~branch ~remote tree stackv4v6 =
     let listen flow =
       check ~pass flow >>= fun run ->
       Stack.TCP.close flow >>= fun () ->
       match run with
-      | true -> reload ~ctx ~remote tree
+      | true -> reload ~ctx ~branch ~remote tree
       | false -> Lwt.return_unit in
     Stack.TCP.listen (Stack.tcp stackv4v6) ~port:9418 listen
 end
