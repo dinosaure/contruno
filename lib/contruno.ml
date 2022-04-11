@@ -2,8 +2,8 @@ open Rresult
 open Lwt.Infix
 
 module Certificate = Value
-module Store = Irmin_mirage_git.Mem.KV (Certificate)
-module Sync  = Irmin.Sync (Store)
+module Store = Irmin_mirage_git.Mem.KV.Make (Certificate)
+module Sync  = Irmin.Sync.Make (Store)
 
 let failwith_error_sync = function
   | Error `Detached_head -> failwith "Detached HEAD"
@@ -22,17 +22,17 @@ let failwith_error_pull = function
   | Ok v -> v
 
 let connect remote ~ctx =
-  let config = Irmin_mem.config () in
-  Store.Repo.v config >>= Store.master >|= fun repository ->
-  repository, Store.remote ~ctx remote
+  let config = Irmin_git.config "." in
+  Store.Repo.v config >>= fun repository -> Store.of_branch repository "master" >>= fun active_branch ->
+  Lwt.return (active_branch, Store.remote ~ctx remote)
 
-let aggregate_certificates store =
-  Store.list store [] >>= fun lst ->
+let aggregate_certificates active_branch =
+  Store.list active_branch [] >>= fun lst ->
   let f acc (name, k) = match Store.Tree.destruct k, Domain_name.of_string name with
     | `Node _, _ -> Lwt.return acc
     | `Contents _, Error _ -> Lwt.return acc
     | `Contents _, Ok hostname ->
-      Store.get store [ name ] >>= fun certificate ->
+      Store.get active_branch [ name ] >>= fun certificate ->
       let hostnames' = X509.Certificate.hostnames certificate.cert in
       let hostnames' = X509.Host.Set.elements hostnames' in
       match hostnames' with
@@ -42,18 +42,18 @@ let aggregate_certificates store =
   Lwt_list.fold_left_s f [] lst
 
 let reload ~ctx ~remote tree =
-  let config = Irmin_mem.config () in
-  Store.Repo.v config >>= Store.master >>= fun store ->
+  let config = Irmin_git.config "." in
+  Store.Repo.v config >>= fun repository -> Store.of_branch repository "master" >>= fun active_branch ->
   let remote = Store.remote ~ctx remote in
-  Sync.pull store remote `Set
+  Sync.pull active_branch remote `Set
   >|= failwith_error_pull
   >>= fun _ ->
-  Store.list store [] >>= fun lst ->
+  Store.list active_branch [] >>= fun lst ->
   let f acc (name, k) = match Store.Tree.destruct k, Domain_name.of_string name with
     | `Node _, _ -> Lwt.return acc
     | `Contents _, Error _ -> Lwt.return acc
     | `Contents _, Ok hostname ->
-      Store.get store [ name ] >>= fun certificate ->
+      Store.get active_branch [ name ] >>= fun certificate ->
       let hostnames' = X509.Certificate.hostnames certificate.cert in
       let hostnames' = X509.Host.Set.elements hostnames' in
       match hostnames' with
@@ -104,7 +104,9 @@ module Make0
         Httpaf.Body.close_writer dst ;
         Httpaf.Body.close_reader src (* XXX(dinosaure): double-close? *)
       and on_read buf ~off ~len =
-        Httpaf.Body.schedule_bigstring dst ~off ~len buf ;
+        L.debug (fun m -> m "Transmit: @[<hov>%a@]" (Hxd_string.pp Hxd.default)
+          (Bigstringaf.substring buf ~off ~len)) ;
+        Httpaf.Body.write_bigstring dst ~off ~len buf ;
         Httpaf.Body.schedule_read src ~on_eof ~on_read in
       Httpaf.Body.schedule_read src ~on_eof ~on_read
 
@@ -153,7 +155,7 @@ module Make0
         H2.Body.close_writer dst ;
         H2.Body.close_reader src (* XXX(dinosaure): double-close? *)
       and on_read buf ~off ~len =
-        H2.Body.schedule_bigstring dst ~off ~len buf ;
+        H2.Body.write_bigstring dst ~off ~len buf ;
         H2.Body.schedule_read src ~on_eof ~on_read in
       H2.Body.schedule_read src ~on_eof ~on_read
 
@@ -215,7 +217,7 @@ module Make
   (Stack : Tcpip.Stack.V4V6)
 = struct
   module Log = (val (Logs.src_log (Logs.Src.create "contruno")))
-  module Paf = Paf_mirage.Make (Time) (Stack)
+  module Paf = Paf_mirage.Make (Time) (Stack.TCP)
 
   module TLS = struct
     include Tls_mirage.Make (Stack.TCP)
@@ -300,31 +302,33 @@ module Make
     | `Delete hostname ->
       Fmt.pf ppf "Delete certificate of %a" Domain_name.pp hostname
 
-  let reasking_and_upgrade store remote http tree cfg v stackv4v6 =
+  let reasking_and_upgrade active_branch remote http tree cfg v stackv4v6 =
     reasking_certificate http tree cfg v stackv4v6 >>= fun action ->
     let info () =
       let date = Int64.of_float Ptime.Span.(to_float_s (v (Pclock.now_d_ps ())))
       and mesg = Fmt.str "%a" pp_action action in
-      Irmin.Info.v ~date ~author:"contruno" mesg in
+      Store.Info.v ~message:mesg ~author:"contruno" date in
     match action with
     | `Set (hostname, v) ->
-      Store.set ~info store [ Domain_name.to_string hostname ] v
+      Store.set ~info active_branch [ Domain_name.to_string hostname ] v
       >|= failwith_error_store
-      >>= fun () -> Sync.push store remote
+      >>= fun () -> Sync.push active_branch remote
       (* XXX(dinosaure): in this case, we should invalidate the given certificate [v]. *)
       >|= failwith_error_sync
       >>= fun _  -> Lwt.return_unit
     | `Delete hostname ->
-      Store.remove ~info ~allow_empty:true store [ Domain_name.to_string hostname ]
+      Store.remove ~info ~allow_empty:true active_branch [ Domain_name.to_string hostname ]
       >|= failwith_error_store
-      >>= fun () -> Sync.push store remote
+      >>= fun () -> Sync.push active_branch remote
       >|= failwith_error_sync
       >>= fun _  -> Lwt.return_unit
 
-  let sanitize http store remote cfg stackv4v6 =
-    aggregate_certificates store >>= fun certificates ->
+  let sanitize http active_branch remote cfg stackv4v6 =
+    aggregate_certificates active_branch >>= fun certificates ->
     let now = Ptime.v (Pclock.now_d_ps ()) in
     let valids, invalids = List.partition (valids_and_invalids ~now) certificates in
+    Log.debug (fun m -> m "%d invalid certificate(s) and %d valid certificate(s)."
+      (List.length invalids) (List.length valids)) ;
     let tree = Art.make () in
     List.iter (fun ({ Certificate.cert; _ } as v) ->
       let hostname = match X509.Certificate.hostnames cert |> X509.Host.Set.elements with
@@ -332,25 +336,25 @@ module Make
         | _ -> assert false (* XXX(dinosaure): see [aggregate_certificates]. *) in
       Art.insert tree (Art.key (Domain_name.to_string hostname)) v) valids ;
     Lwt_list.iter_s
-      (fun v -> reasking_and_upgrade store remote http tree cfg v stackv4v6) invalids >>= fun () ->
+      (fun v -> reasking_and_upgrade active_branch remote http tree cfg v stackv4v6) invalids >>= fun () ->
     Lwt.return tree
 
   let _tls_edn, tls_protocol = Mimic.register ~name:"tls-with-reneg" (module TLS)
 
   let set ~ctx remote tree hostname v =
-    let config = Irmin_mem.config () in
-    Store.Repo.v config >>= Store.master >>= fun store ->
+    let config = Irmin_git.config "." in
+    Store.Repo.v config >>= fun repository -> Store.of_branch repository "master" >>= fun active_branch ->
     let remote = Store.remote ~ctx remote in
-    Sync.pull store remote `Set
+    Sync.pull active_branch remote `Set
     >|= failwith_error_pull
     >>= fun _ ->
     let info () =
       let date = Int64.of_float Ptime.Span.(to_float_s (v (Pclock.now_d_ps ())))
       and mesg = Fmt.str "%a" pp_action (`Set (hostname, v)) in
-      Irmin.Info.v ~date ~author:"contruno" mesg in
-    Store.set ~info store [ Domain_name.to_string hostname ] v
+      Store.Info.v ~message:mesg ~author:"contruno" date in
+    Store.set ~info active_branch [ Domain_name.to_string hostname ] v
     >|= failwith_error_store
-    >>= fun () -> Sync.push store remote
+    >>= fun () -> Sync.push active_branch remote
     (* XXX(dinosaure): in this case, we should invalidate the given certificate [v]. *)
     >|= failwith_error_sync
     >>= fun _  ->
@@ -361,9 +365,13 @@ module Make
   let rec create_upgrader http conns tree ~ctx remote cfg stackv4v6 (hostname : Art.key) old_certificate =
     let { production; email; account_seed; certificate_seed; } = cfg in
     let f = upgrade_and_renegociate http conns tree ~ctx remote cfg stackv4v6 hostname old_certificate in
-    Certif.thread_for http
-      (old_certificate.Certificate.cert, old_certificate.Certificate.pkey)
-      ~production ?email ?account_seed ?certificate_seed f stackv4v6
+    try
+      Certif.thread_for http
+        (old_certificate.Certificate.cert, old_certificate.Certificate.pkey)
+        ~production ?email ?account_seed ?certificate_seed f stackv4v6
+    with exn ->
+      Log.err (fun m -> m "Got an error for %s: %S" (hostname :> string) (Printexc.to_string exn)) ;
+      `Ready Lwt.return_unit
   and upgrade_and_renegociate http conns tree ~ctx remote cfg stackv4v6 hostname old_certificate = function
     | Ok (`Single ([ cert ], pkey)) ->
       ( try Art.remove tree hostname with _ -> () ) ;
@@ -375,13 +383,15 @@ module Make
     | _ -> assert false
 
   let initialize http ~ctx ~remote cfg stackv4v6 =
-    let config = Irmin_mem.config () in
-    Store.Repo.v config >>= Store.master >>= fun store ->
+    let config = Irmin_git.config "." in
+    Store.Repo.v config >>= fun repository -> Store.of_branch repository "master" >>= fun active_branch ->
     let upstream = Store.remote ~ctx remote in
-    Sync.pull store upstream `Set
+    Sync.pull active_branch upstream `Set
     >|= failwith_error_pull
     >>= fun _ ->
-    sanitize http store upstream cfg stackv4v6 >>= fun tree ->
+    Log.debug (fun m -> m "Start to sanitize TLS certificates.") ;
+    sanitize http active_branch upstream cfg stackv4v6 >>= fun tree ->
+    Log.debug (fun m -> m "TLS certificates sanitized.") ;
     let conns = Hashtbl.create 0x1000 in
     let f hostname v acc =
       create_upgrader http conns tree ~ctx remote cfg stackv4v6 hostname v :: acc in
@@ -389,12 +399,12 @@ module Make
     Lwt.return (conns, tree, ths)
 
   let info =
-    let alpn { TLS.flow; _ } = match TLS.epoch flow with
+    let alpn (_, { TLS.flow; _ }) = match TLS.epoch flow with
       | Ok { Tls.Core.alpn_protocol; _ } -> alpn_protocol
       | Error _ -> None in
-    let peer { TLS.edn= (ipaddr, port); _ } = Fmt.str "%a:%d" Ipaddr.pp ipaddr port in
+    let peer ((ipaddr, port), _) = Fmt.str "%a:%d" Ipaddr.pp ipaddr port in
     let module R = (val Mimic.repr tls_protocol) in
-    let injection flow = R.T flow in
+    let injection (_, flow) = R.T flow in
     { Alpn.alpn; peer; injection; }
 
   let hostname_of_flow flow : [ `host ] Domain_name.t = match TLS.epoch flow with
@@ -433,30 +443,30 @@ module Make
     | false, false -> []
 
   let serve conns tree ~error_handler stackv4v6 =
-    let accept t =
-      Paf.accept t >>= function
-      | Error _ as err -> Lwt.return err
-      | Ok tcp ->
-        let f _ { Certificate.cert; pkey; _ } acc = ([ cert ], pkey) :: acc in
-        let certs = Art.iter ~f [] tree in
-        let cfg = Tls.Config.server
-          ~alpn_protocols:(alpn_protocols tree)
-          ~certificates:(`Multiple certs) () in
-        TLS.server_of_flow cfg tcp >>= function
-        | Ok flow ->
-          let hostname = hostname_of_flow flow in
-          let edn = Paf.TCP.dst tcp in
-          let rd = Lwt_mutex.create () and wr = Lwt_mutex.create () in
-          let finalizer () = Hashtbl.remove conns edn in
-          let flow = { TLS.edn; rd; wr; flow; hostname; finalizer; } in
-          Hashtbl.add conns edn flow ;
-          Lwt.return_ok flow
-        | Error `Closed -> Lwt.return_error (`Write `Closed)
-        | Error err ->
-          let err = R.msgf "%a" TLS.pp_write_error err in
-          Paf.TCP.close tcp >>= fun () -> Lwt.return_error err in
+    let handshake tcp =
+      let ipaddr, port = Stack.TCP.dst tcp in
+      Log.debug (fun m -> m "Got a TCP/IP connection from %a:%d." Ipaddr.pp ipaddr port) ;
+      let f _ { Certificate.cert; pkey; _ } acc = ([ cert ], pkey) :: acc in
+      let certs = Art.iter ~f [] tree in
+      let cfg = Tls.Config.server
+        ~alpn_protocols:(alpn_protocols tree)
+        ~certificates:(`Multiple certs) () in
+      Log.debug (fun m -> m "Upgrade the TCP/IP connection with TLS.") ;
+      TLS.server_of_flow cfg tcp >>= function
+      | Ok flow ->
+        let hostname = hostname_of_flow flow in
+        let edn = Paf.TCP.dst tcp in
+        let rd = Lwt_mutex.create () and wr = Lwt_mutex.create () in
+        let finalizer () = Hashtbl.remove conns edn in
+        let flow = { TLS.edn; rd; wr; flow; hostname; finalizer; } in
+        Hashtbl.add conns edn flow ;
+        Lwt.return_ok (edn, flow)
+      | Error `Closed -> Lwt.return_error (`Write `Closed)
+      | Error err ->
+        let err = R.msgf "%a" TLS.pp_write_error err in
+        Paf.TCP.close tcp >>= fun () -> Lwt.return_error err in
     let close _ = Lwt.return_unit in
-    Alpn.service info accept close
+    Alpn.service info handshake Paf.accept close
       ~error_handler
       ~request_handler:(request_handler stackv4v6 tree)
 

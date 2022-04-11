@@ -3,7 +3,7 @@ open Lwt.Infix
 
 module Certificate = Value
 module Store = Irmin_unix.Git.Mem.KV (Certificate)
-module Sync = Irmin.Sync (Store)
+module Sync = Irmin.Sync.Make (Store)
 
 let rec upgrade ~pass inet_addr =
   let target = Unix.ADDR_INET (inet_addr, 9418) in
@@ -129,15 +129,15 @@ let add hostname cert pkey ip alpn remote ~pass target =
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "objects")) in
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "objects" / "pack")) in
   let config = Irmin_git.config (Fpath.to_string tmp) in
-  Store.Repo.v config >>= Store.master >>= fun store ->
+  Store.Repo.v config >>= Store.main >>= fun store ->
   unix_ctx_with_ssh () >>= fun ctx ->
-  let remote = Store.remote ~ctx remote in
+  Store.remote ~ctx remote >>= fun remote ->
   Sync.pull store remote `Set >|= R.reword_error (fun err -> `Pull err) >>? fun _ ->
   let v = { Certificate.cert; pkey; ip; alpn; } in
   let info () =
     let date = Int64.of_float (Unix.gettimeofday ())
     and mesg = Fmt.str "New certificate for %a added" Domain_name.pp hostname in
-    Irmin.Info.v ~date ~author:"contruno.add" mesg in
+    Store.Info.v ~message:mesg ~author:"contruno.add" date in
   Store.set ~info store [ Domain_name.to_string hostname ] v
   >|= R.reword_error (fun err -> `Set err) >>? fun _ ->
   Sync.push store remote >|= R.reword_error (fun err -> `Push err) >>? fun _ ->
@@ -149,7 +149,7 @@ let pp_sockaddr ppf = function
 
 let run _ hostname (_, cert) (_, pkey) ip alpn remote pass target =
   match Lwt_main.run (add hostname cert pkey ip alpn remote ~pass target) with
-  | Ok () -> `Ok 0
+  | Ok () -> `Ok ()
   | Error (`Pull _err) -> `Error (false, Fmt.str "Unreachable Git repository.")
   | Error (`Set _err) -> `Error (false, Fmt.str "Unable to locally set the store.")
   | Error (`Push _err) -> `Error (false, Fmt.str "Unallowed to push to %s." remote)
@@ -253,11 +253,11 @@ let target =
 let common_options = "COMMON OPTIONS"
 
 let verbosity =
-  let env = Arg.env_var "CONTRUNO_LOGS" in
+  let env = Cmd.Env.info "CONTRUNO_LOGS" in
   Logs_cli.level ~docs:common_options ~env ()
 
 let renderer =
-  let env = Arg.env_var "CONTRUNO_FMT" in
+  let env = Cmd.Env.info "CONTRUNO_FMT" in
   Fmt_cli.style_renderer ~docs:common_options ~env ()
 
 let reporter ppf =
@@ -289,7 +289,8 @@ let cmd =
     ; `P "$(t,name) is a simple tool to push a certificate with its private key to the Git repository used by \
           the $(i,contruno) unikernel. Then, the tool will send a notification to the unikernel to re-synchronize it \
           with the Git repository." ] in
-  Term.(ret (const run $ setup_logs $ hostname $ certificate $ private_key $ ip $ alpn $ remote $ pass $ target)),
-  Term.info "add" ~doc ~man
+  let info = Cmd.info "add" ~doc ~man in
+  Cmd.v info
+  Term.(ret (const run $ setup_logs $ hostname $ certificate $ private_key $ ip $ alpn $ remote $ pass $ target))
 
-let () = Term.(exit_status @@ eval cmd)
+let () = exit @@ Cmd.eval cmd

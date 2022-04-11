@@ -9,8 +9,8 @@ module Certificate : sig
   include Irmin.Contents.S with type t := t
 end
 
-module Store : module type of Irmin_mirage_git.Mem.KV (Certificate)
-module Sync  : module type of Irmin.Sync (Store)
+module Store : module type of Irmin_mirage_git.Mem.KV.Make (Certificate)
+module Sync  : module type of Irmin.Sync.Make (Store)
 
 type cfg =
   { production : bool
