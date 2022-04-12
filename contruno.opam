@@ -24,7 +24,7 @@ depends: [
   "mirage-random"
   "mirage-stack"
   "mirage-time"
-  "paf"              {>= "0.0.8"}
-  "paf-le"           {>= "0.0.8"}
+  "paf"              {>= "0.0.9"}
+  "paf-le"           {>= "0.0.9"}
   "x509"
 ]
