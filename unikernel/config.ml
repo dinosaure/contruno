@@ -56,8 +56,8 @@ let git =
 
 let packages =
   [ package "contruno"
-  ; package "paf"
-  ; package "irmin-mirage-git" ~min:"2.10.2" ~max:"3.0.0"
+  ; package "paf" ~min:"0.0.9"
+  ; package "irmin-mirage-git" ~min:"3.0.0"
   ; package "paf-le" ]
 
 let () =
