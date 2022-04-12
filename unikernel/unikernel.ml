@@ -21,9 +21,12 @@ module Make
                ; email= Option.bind (Key_gen.email ()) (R.to_option <.> Emile.of_string)
                ; account_seed= Key_gen.account_seed ()
                ; certificate_seed= Key_gen.certificate_seed () } in
-    initialize http ~ctx ~remote:(Key_gen.remote ()) cfg stackv4v6 >>= fun (conns, tree, ths) ->
+    let remote, branch = match String.split_on_char '#' (Key_gen.remote ()) with
+      | [ remote; branch; ] -> remote, branch
+      | _ -> Key_gen.remote (), "master" in
+    initialize http ~ctx ~branch ~remote cfg stackv4v6 >>= fun (conns, tree, ths) ->
     let service = serve conns tree ~error_handler (Stack.tcp stackv4v6) in
-    add_hook ~pass:(Key_gen.pass ()) ~ctx ~remote:(Key_gen.remote ()) tree stackv4v6 ;
+    add_hook ~pass:(Key_gen.pass ()) ~ctx ~branch ~remote tree stackv4v6 ;
     init ~port:443 stackv4v6 >>= fun stack ->
     let stop = Lwt_switch.create () in
     let `Initialized th = Paf.serve ~sleep:Time.sleep_ns ~stop service stack in
