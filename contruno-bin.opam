@@ -15,6 +15,6 @@ run-test: [ "dune" "runtest" "-p" name "-j" jobs ]
 
 depends: [
   "dune"             {>= "2.9.0"}
-  "irmin-unix"       {>= "2.10.2"}
+  "irmin-unix"       {>= "3.0.0"}
   "contruno"         {= version}
 ]
