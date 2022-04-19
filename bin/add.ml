@@ -122,6 +122,9 @@ let ( >>? ) = Lwt_result.bind
 
 let add hostname cert pkey ip alpn remote ~pass target =
   (* XXX(dinosaure): hmmmhmmm, we should not do that. *)
+  let remote, branch = match String.split_on_char '#' remote with
+    | [ remote; branch ] -> remote, branch
+    | _ -> remote, "main" in
   let tmp = R.failwith_error_msg (Bos.OS.Dir.tmp "git-%s") in
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git")) in
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "refs")) in
@@ -129,18 +132,18 @@ let add hostname cert pkey ip alpn remote ~pass target =
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "objects")) in
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "objects" / "pack")) in
   let config = Irmin_git.config (Fpath.to_string tmp) in
-  Store.Repo.v config >>= Store.main >>= fun store ->
+  Store.Repo.v config >>= fun repo -> Store.of_branch repo branch >>= fun active_branch ->
   unix_ctx_with_ssh () >>= fun ctx ->
   Store.remote ~ctx remote >>= fun remote ->
-  Sync.pull store remote `Set >|= R.reword_error (fun err -> `Pull err) >>? fun _ ->
+  Sync.pull active_branch remote `Set >|= R.reword_error (fun err -> `Pull err) >>? fun _ ->
   let v = { Certificate.cert; pkey; ip; alpn; } in
   let info () =
     let date = Int64.of_float (Unix.gettimeofday ())
     and mesg = Fmt.str "New certificate for %a added" Domain_name.pp hostname in
     Store.Info.v ~message:mesg ~author:"contruno.add" date in
-  Store.set ~info store [ Domain_name.to_string hostname ] v
+  Store.set ~info active_branch [ Domain_name.to_string hostname ] v
   >|= R.reword_error (fun err -> `Set err) >>? fun _ ->
-  Sync.push store remote >|= R.reword_error (fun err -> `Push err) >>? fun _ ->
+  Sync.push active_branch remote >|= R.reword_error (fun err -> `Push err) >>? fun _ ->
   upgrade ~pass target
 
 let pp_sockaddr ppf = function
@@ -205,12 +208,6 @@ let alpn =
     | Certificate.H2 -> Fmt.string ppf "h2" in
   Arg.conv (parser, pp)
 
-let remote =
-  let parser str = match Smart_git.Endpoint.of_string str with
-    | Ok _ -> Ok str
-    | Error _ as err -> err in
-  Arg.conv (parser, Fmt.string)
-
 let inet_addr =
   let parser str = match Unix.inet_addr_of_string str with
     | v -> Ok v
@@ -240,7 +237,7 @@ let alpn =
 
 let remote =
   let doc = "The Git repository." in
-  Arg.(required & opt (some remote) None & info [ "r"; "remote" ] ~doc)
+  Arg.(required & opt (some string) None & info [ "r"; "remote" ] ~doc)
 
 let pass =
   let doc = "The passphrase to upgrade the unikernel." in
