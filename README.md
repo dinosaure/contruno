@@ -39,20 +39,31 @@ the unikernel (via the password) to reload certificates.
 
 ### How to compile the project?
 
-As any MirageOS projects, you have the `unikernel.ml` which is the application
-and the `config.ml` which is the manifest to compile/craft the unikernel. This
-is the process to compile a full Operating System which can be virtualized
-_via_ `kvm` (we require `opam`):
+The `contruno` repository provides three things: a `contruno` OCaml library, a
+`contruno.add` binary (used to configure the unikernel), and the `contruno`
+unikernel itself.
+
+First, let's install the library and binary as opam packages:
 ```sh
-$ git clone https://github.com/dinosaure/contruno
-$ cd contruno/mirage
-% opam install mirage
-$ mirage configure -t hvt
-$ make depends
-$ mirage build
+git clone https://github.com/dinosaure/contruno && cd contruno
+opam pin .
 ```
 
-And you have an image `contruno.hvt` which can be deployed.
+Building the unikernel requires mirage and dune:
+```
+opam install 'mirage>=4.0' 'dune>=3.0'
+```
+
+Next, let's build the unikernel. Due to a build system limitation, we need to
+copy the sources in `unikernel/` somewhere else before building:
+```sh
+cp -r unikernel /tmp/ && cd /tmp/unikernel/
+mirage configure -t hvt  # hvt for the KVM target
+make depends
+mirage build
+```
+
+And we now have a unikernel image `dist/contruno.hvt` ready to be deployed.
 
 ### How to deploy the _unikernel_?
 
