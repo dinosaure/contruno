@@ -4,6 +4,7 @@ open Lwt.Infix
 module Certificate = Value
 module Store = Irmin_mirage_git.Mem.KV.Make (Certificate)
 module Sync  = Irmin.Sync.Make (Store)
+module Log = (val (Logs.src_log (Logs.Src.create "contruno")))
 
 let failwith_error_sync = function
   | Error `Detached_head -> failwith "Detached HEAD"
@@ -44,8 +45,8 @@ let aggregate_certificates active_branch =
 let reload ~ctx ~branch ~remote tree =
   let config = Irmin_git.config "." in
   Store.Repo.v config >>= fun repository -> Store.of_branch repository branch >>= fun active_branch ->
-  let remote = Store.remote ~ctx remote in
-  Sync.pull active_branch remote `Set
+  let upstream = Store.remote ~ctx remote in
+  Sync.pull active_branch upstream `Set
   >|= failwith_error_pull
   >>= fun _ ->
   Store.list active_branch [] >>= fun lst ->
@@ -101,8 +102,9 @@ module Make0
     : [ `read ] Httpaf.Body.t -> [ `write ] Httpaf.Body.t -> unit
     = fun src dst ->
       let rec on_eof () =
+        Httpaf.Body.close_reader src ;
         Httpaf.Body.close_writer dst ;
-        Httpaf.Body.close_reader src (* XXX(dinosaure): double-close? *)
+        L.debug (fun m -> m "Close reader and writer.")
       and on_read buf ~off ~len =
         L.debug (fun m -> m "Transmit: @[<hov>%a@]" (Hxd_string.pp Hxd.default)
           (Bigstringaf.substring buf ~off ~len)) ;
@@ -140,7 +142,14 @@ module Make0
       L.debug (fun m -> m "Bridge %s with %a:80." peer Ipaddr.pp ip) ;
       Lwt.async @@ fun () ->
       Stack.TCP.create_connection stackv4v6 (ip, 80) >>= function
-      | Error _ -> assert false
+      | Error _ ->
+        let contents = Fmt.str "%a unreachable." Ipaddr.pp ip in
+        let headers = Httpaf.Headers.of_list
+          [ "content-type", "text/plain"
+          ; "content-length", string_of_int (String.length contents) ] in
+        let response = Httpaf.Response.create ~headers `Internal_server_error in
+        Httpaf.Reqd.respond_with_string reqd response contents ;
+        Lwt.return_unit
       | Ok flow ->
         let dst, conn = Httpaf.Client_connection.request
           ~error_handler:http_1_1_error_handler
