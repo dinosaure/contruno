@@ -7,8 +7,9 @@ module Sync  = Irmin.Sync.Make (Store)
 module Log = (val (Logs.src_log (Logs.Src.create "contruno")))
 
 let failwith_error_sync = function
-  | Error `Detached_head -> failwith "Detached HEAD"
-  | Error (`Msg err) -> failwith err
+  | Error err ->
+    Log.err (fun m -> m "Got a push-error: %a." Sync.pp_push_error err) ;
+    Fmt.failwith "%a." Sync.pp_push_error err
   | Ok v -> v
 
 let failwith_error_store = function
@@ -18,8 +19,9 @@ let failwith_error_store = function
   | Ok v -> v
 
 let failwith_error_pull = function
-  | Error (`Conflict err) -> Fmt.failwith "Conflict: %s" err
-  | Error (`Msg err) -> failwith err
+  | Error err ->
+    Log.err (fun m -> m "Got a pull-error: %a." Sync.pp_pull_error err) ;
+    Fmt.failwith "%a." Sync.pp_pull_error err
   | Ok v -> v
 
 let connect remote branch ~ctx =
@@ -42,7 +44,7 @@ let aggregate_certificates active_branch =
       | _ -> Lwt.return acc in
   Lwt_list.fold_left_s f [] lst
 
-let reload ~ctx ~branch ~remote tree =
+let reload ~ctx ~branch ~remote tree push =
   let config = Irmin_git.config "." in
   Store.Repo.v config >>= fun repository -> Store.of_branch repository branch >>= fun active_branch ->
   let upstream = Store.remote ~ctx remote in
@@ -64,7 +66,8 @@ let reload ~ctx ~branch ~remote tree =
   Lwt_list.fold_left_s f [] lst >>= fun certificates ->
   let f (hostname, certificate) =
     ( try Art.remove tree (Art.key (Domain_name.to_string hostname)) with _ -> () ) ;
-    Art.insert tree (Art.key (Domain_name.to_string hostname)) certificate in
+    Art.insert tree (Art.key (Domain_name.to_string hostname)) certificate ;
+    push (Some (hostname, certificate)) in
   List.iter f certificates ; Lwt.return_unit
 
 type cfg =
@@ -116,7 +119,43 @@ module Make0
     let dst = Httpaf.Reqd.respond_with_streaming reqd resp in
     transmit src dst
 
-  let http_1_1_error_handler _err = ()
+  let http_1_1_error_handler _err = () (* TODO(dinosaure): retransmit the error to the client. *)
+
+  let err_host_not_found reqd =
+    let open Httpaf in
+    let contents = "Host not found (this field is required)." in
+    let headers = Headers.of_list
+      [ "content-type", "text/plain"
+      ; "content-length", string_of_int (String.length contents) ] in
+    let response = Response.create ~headers `Not_found in
+    Reqd.respond_with_string reqd response contents
+
+  let err_invalid_hostname reqd =
+    let open Httpaf in
+    let contents = "Invalid hostname." in
+    let headers = Headers.of_list
+      [ "content-type", "text/plain"
+      ; "content-length", string_of_int (String.length contents) ] in
+    let response = Response.create ~headers `Bad_request in
+    Reqd.respond_with_string reqd response contents
+
+  let err_host_does_not_exist reqd =
+    let open Httpaf in
+    let contents = "Host unavailable." in
+    let headers = Headers.of_list
+      [ "content-type", "text/plain"
+      ; "content-length", string_of_int (String.length contents) ] in
+    let response = Response.create ~headers `Not_found in
+    Reqd.respond_with_string reqd response contents
+
+  let err_target_does_not_handle_http_1_1 reqd =
+    let open Httpaf in
+    let contents = "Webservice does not handle http/1.1 protocol." in
+    let headers = Headers.of_list
+      [ "content-type", "text/plain"
+      ; "content-length", string_of_int (String.length contents) ] in
+    let response = Response.create ~headers `Http_version_not_supported in
+    Reqd.respond_with_string reqd response contents
 
   let http_1_1_request_handler stackv4v6 tree peer reqd =
     let request = Httpaf.Reqd.request reqd in
@@ -134,10 +173,10 @@ module Make0
       then ok certificate
       else error `Target_does_not_handle_HTTP_1_1 in
     match certificate with
-    | Error `Host_not_found -> assert false
-    | Error (`Invalid_hostname _) -> assert false
-    | Error (`Host_does_not_exist _) -> assert false
-    | Error `Target_does_not_handle_HTTP_1_1 -> assert false
+    | Error `Host_not_found -> err_host_not_found reqd
+    | Error (`Invalid_hostname _) -> err_invalid_hostname reqd
+    | Error (`Host_does_not_exist _) -> err_host_does_not_exist reqd
+    | Error `Target_does_not_handle_HTTP_1_1 -> err_target_does_not_handle_http_1_1 reqd
     | Ok { Certificate.ip; _ } ->
       L.debug (fun m -> m "Bridge %s with %a:80." peer Ipaddr.pp ip) ;
       Lwt.async @@ fun () ->
@@ -147,7 +186,7 @@ module Make0
         let headers = Httpaf.Headers.of_list
           [ "content-type", "text/plain"
           ; "content-length", string_of_int (String.length contents) ] in
-        let response = Httpaf.Response.create ~headers `Internal_server_error in
+        let response = Httpaf.Response.create ~headers `Bad_gateway in
         Httpaf.Reqd.respond_with_string reqd response contents ;
         Lwt.return_unit
       | Ok flow ->
@@ -155,6 +194,8 @@ module Make0
           ~error_handler:http_1_1_error_handler
           ~response_handler:(http_1_1_response_handler reqd) request in
         transmit (Httpaf.Reqd.request_body reqd) dst ;
+        (* XXX(dinosaure): we probably [pick] with a [timeout] to be sure
+         * that the resource is restricted and released. *)
         Paf.run (module Httpaf_client_connection) ~sleep:Time.sleep_ns conn (R.T flow)
 
   let transmit
@@ -183,6 +224,42 @@ module Make0
 
   let http_2_0_error_handler _err = ()
 
+  let err_host_not_found reqd =
+    let open H2 in
+    let contents = "Host not found (this field is required)." in
+    let headers = Headers.of_list
+      [ "content-type", "text/plain"
+      ; "content-length", string_of_int (String.length contents) ] in
+    let response = Response.create ~headers `Not_found in
+    Reqd.respond_with_string reqd response contents
+
+  let err_invalid_hostname reqd =
+    let open H2 in
+    let contents = "Invalid hostname." in
+    let headers = Headers.of_list
+      [ "content-type", "text/plain"
+      ; "content-length", string_of_int (String.length contents) ] in
+    let response = Response.create ~headers `Bad_request in
+    Reqd.respond_with_string reqd response contents
+
+  let err_host_does_not_exist reqd =
+    let open H2 in
+    let contents = "Host unavailable." in
+    let headers = Headers.of_list
+      [ "content-type", "text/plain"
+      ; "content-length", string_of_int (String.length contents) ] in
+    let response = Response.create ~headers `Not_found in
+    Reqd.respond_with_string reqd response contents
+
+  let err_target_does_not_handle_h2 reqd =
+    let open H2 in
+    let contents = "Webservice does not handle h2 protocol." in
+    let headers = Headers.of_list
+      [ "content-type", "text/plain"
+      ; "content-length", string_of_int (String.length contents) ] in
+    let response = Response.create ~headers `Http_version_not_supported in
+    Reqd.respond_with_string reqd response contents
+
   let http_2_0_request_handler stackv4v6 tree reqd =
     let request = H2.Reqd.request reqd in
     let certificate =
@@ -198,14 +275,21 @@ module Make0
       then ok certificate
       else error `Target_does_not_handle_HTTP_2_0 in
     match certificate with
-    | Error `Host_not_found -> assert false
-    | Error (`Invalid_hostname _) -> assert false
-    | Error (`Host_does_not_exist _) -> assert false
-    | Error `Target_does_not_handle_HTTP_2_0 -> assert false
+    | Error `Host_not_found -> err_host_not_found reqd
+    | Error (`Invalid_hostname _) -> err_invalid_hostname reqd
+    | Error (`Host_does_not_exist _) -> err_host_does_not_exist reqd
+    | Error `Target_does_not_handle_HTTP_2_0 -> err_target_does_not_handle_h2 reqd
     | Ok { Certificate.ip; _ } ->
       Lwt.async @@ fun () ->
       Stack.TCP.create_connection stackv4v6 (ip, 80) >>= function
-      | Error _ -> assert false
+      | Error _ ->
+        let contents = Fmt.str "%a unreachable." Ipaddr.pp ip in
+        let headers = H2.Headers.of_list
+          [ "content-type", "text/plain"
+          ; "content-length", string_of_int (String.length contents) ] in
+        let response = H2.Response.create ~headers `Bad_gateway in
+        H2.Reqd.respond_with_string reqd response contents ;
+        Lwt.return_unit
       | Ok flow ->
         let conn = H2.Client_connection.create ?config:None
           ~error_handler:http_2_0_error_handler
@@ -371,25 +455,30 @@ module Make
     Art.insert tree (Art.key (Domain_name.to_string hostname)) v ;
     Lwt.return_unit
 
-  let rec create_upgrader http conns tree ~ctx branch remote cfg stackv4v6 (hostname : Art.key) old_certificate =
+  let rec create_upgrader http conns tree ~ctx ~branch ~remote cfg stackv4v6 (hostname : Art.key) old_certificate : ([ `Ready ] -> unit Lwt.t) Lwt.t =
     let { production; email; account_seed; certificate_seed; } = cfg in
-    let f = upgrade_and_renegociate http conns tree ~ctx branch remote cfg stackv4v6 hostname old_certificate in
+    let f = upgrade_and_renegociate http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname old_certificate in
     try
-      Certif.thread_for http
+      let fn = Certif.thread_for http
         (old_certificate.Certificate.cert, old_certificate.Certificate.pkey)
-        ~production ?email ?account_seed ?certificate_seed f stackv4v6
+        ~production ?email ?account_seed ?certificate_seed f stackv4v6 in
+      Lwt.return fn
     with exn ->
       Log.err (fun m -> m "Got an error for %s: %S" (hostname :> string) (Printexc.to_string exn)) ;
-      `Ready Lwt.return_unit
-  and upgrade_and_renegociate http conns tree ~ctx branch remote cfg stackv4v6 hostname old_certificate = function
+      Lwt.return (fun `Ready -> Lwt.return_unit)
+  and upgrade_and_renegociate http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname old_certificate
+    new_certificate : ([ `Ready ] -> unit Lwt.t) Lwt.t = match new_certificate with
     | Ok (`Single ([ cert ], pkey)) ->
       ( try Art.remove tree hostname with _ -> () ) ;
       let v = { Certificate.cert; pkey; ip= old_certificate.Certificate.ip;
           alpn= old_certificate.Certificate.alpn; } in
       renegociation tree conns >>= fun () ->
       set ~ctx branch remote tree (Domain_name.of_string_exn (hostname :> string)) v >>= fun () ->
-      let `Ready th = create_upgrader http conns tree ~ctx branch remote cfg stackv4v6 hostname v in th
+      create_upgrader http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname v
     | _ -> assert false
+
+  type upgrader =
+    [ `Upgrader of Art.key -> Certificate.t -> ([ `Ready ] -> unit Lwt.t) Lwt.t ]
 
   let initialize http ~ctx ~branch ~remote cfg stackv4v6 =
     let config = Irmin_git.config "." in
@@ -402,10 +491,13 @@ module Make
     sanitize http active_branch upstream cfg stackv4v6 >>= fun tree ->
     Log.debug (fun m -> m "TLS certificates sanitized.") ;
     let conns = Hashtbl.create 0x1000 in
-    let f hostname v acc =
-      create_upgrader http conns tree ~ctx branch remote cfg stackv4v6 hostname v :: acc in
+    let f (hostname : Art.key) v acc =
+      let hostname' = Domain_name.of_string_exn (hostname :> string) in
+      (hostname', create_upgrader http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname v) :: acc in
     let ths = Art.iter ~f [] tree in
-    Lwt.return (conns, tree, ths)
+    let upgrader hostname v =
+      create_upgrader http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname v in
+    Lwt.return (conns, tree, ths, `Upgrader upgrader)
 
   let info =
     let alpn (_, { TLS.flow; _ }) = match TLS.epoch flow with
@@ -416,14 +508,14 @@ module Make
     let injection (_, flow) = R.T flow in
     { Alpn.alpn; peer; injection; }
 
-  let hostname_of_flow flow : [ `host ] Domain_name.t = match TLS.epoch flow with
-    | Error _ -> assert false
+  let hostname_of_flow flow : [ `host ] Domain_name.t option = match TLS.epoch flow with
+    | Error _ -> None
     | Ok { Tls.Core.own_certificate; _ } ->
       let hosts = List.map Tls.Core.Cert.hostnames own_certificate in
       let hosts = List.fold_left X509.Host.Set.union X509.Host.Set.empty hosts in
       match X509.Host.Set.elements hosts with
-      | [] -> assert false
-      | (_, hostname) :: _ -> hostname
+      | [] -> None
+      | (_, hostname) :: _ -> Some hostname
 
   include Make0 (Time) (Stack)
   open Rresult
@@ -463,13 +555,17 @@ module Make
       Log.debug (fun m -> m "Upgrade the TCP/IP connection with TLS.") ;
       TLS.server_of_flow cfg tcp >>= function
       | Ok flow ->
-        let hostname = hostname_of_flow flow in
-        let edn = Paf.TCP.dst tcp in
-        let rd = Lwt_mutex.create () and wr = Lwt_mutex.create () in
-        let finalizer () = Hashtbl.remove conns edn in
-        let flow = { TLS.edn; rd; wr; flow; hostname; finalizer; } in
-        Hashtbl.add conns edn flow ;
-        Lwt.return_ok (edn, flow)
+        ( match hostname_of_flow flow with
+        | Some hostname ->
+          let edn = Paf.TCP.dst tcp in
+          let rd = Lwt_mutex.create () and wr = Lwt_mutex.create () in
+          let finalizer () = Hashtbl.remove conns edn in
+          let flow = { TLS.edn; rd; wr; flow; hostname; finalizer; } in
+          Hashtbl.add conns edn flow ;
+          Lwt.return_ok (edn, flow)
+        | None ->
+          let err = R.msgf "The TLS handshake missing the hostname" in
+          Paf.TCP.close tcp >>= fun () -> Lwt.return_error err )
       | Error `Closed -> Lwt.return_error (`Write `Closed)
       | Error err ->
         let err = R.msgf "%a" TLS.pp_write_error err in
@@ -493,12 +589,12 @@ module Make
     | Ok `Eof -> Lwt.return_error `Connection_reset_by_peer
     | Error err -> Lwt.return_error (`TCP err) 
 
-  let add_hook ~pass ~ctx ~branch ~remote tree stackv4v6 =
+  let add_hook ~pass ~ctx ~branch ~remote tree push stackv4v6 =
     let listen flow =
       check ~pass flow >>= fun run ->
       Stack.TCP.close flow >>= fun () ->
       match run with
-      | true -> reload ~ctx ~branch ~remote tree
+      | true -> reload ~ctx ~branch ~remote tree push
       | false -> Lwt.return_unit in
     Stack.TCP.listen (Stack.tcp stackv4v6) ~port:9418 listen
 end

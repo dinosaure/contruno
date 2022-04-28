@@ -120,6 +120,50 @@ let upgrade ~pass target =
 
 let ( >>? ) = Lwt_result.bind
 
+let _10d = Ptime.Span.v (10, 0L)
+let _5d = Ptime.Span.v (5, 0L)
+let prefix = X509.Distinguished_name.[ Relative_distinguished_name.singleton (CN "Contruno") ]
+let cacert_dn = X509.Distinguished_name.(prefix @ [ Relative_distinguished_name.singleton (CN "Ephemeral CA for Contruno") ])
+let cacert_serial_number = Z.zero
+
+let get_certificate_and_pkey ?seed ~hostname cert pkey = match cert, pkey with
+  | Some cert, Some pkey when X509.Certificate.supports_hostname cert hostname ->
+    Lwt.return_ok (cert, pkey)
+  | Some _, Some _ ->
+    Lwt.return_error (`Invalid_arguments "The given certificate does not support your hostname")
+  | Some _, None ->
+    Lwt.return_error (`Invalid_arguments "You must give a private key if you give a certificate")
+  | None, _ ->
+    let pkey = match pkey with
+      | Some pkey -> pkey
+      | None ->
+        let g = Mirage_crypto_rng.(create ?seed (module Fortuna)) in
+        `RSA (Mirage_crypto_pk.Rsa.generate ~g ~bits:4096 ()) in
+    let valid_from = Ptime.v (Ptime_clock.now_d_ps ()) |> fun v -> Ptime.sub_span v _10d |> Option.get in
+    let valid_until = Ptime.add_span valid_from _5d |> Option.get in
+    let cert =
+      let open Rresult in
+      X509.Signing_request.create cacert_dn pkey >>= fun ca_csr ->
+      let extensions =
+        let open X509.Extension in
+        let key_id = X509.Public_key.id X509.Signing_request.((info ca_csr).public_key) in
+        let authority_key_id =
+          (Some key_id, X509.General_name.(singleton Directory [ cacert_dn ]),
+           Some cacert_serial_number) in
+        empty
+        |> add Subject_alt_name (true,
+                                 X509.General_name.(singleton DNS [ Domain_name.to_string hostname ]))
+        |> add Key_usage (true, [ `Digital_signature; `Content_commitment; `Key_encipherment ])
+        |> add Subject_key_id (false, key_id)
+        |> add Authority_key_id (false, authority_key_id) in
+      X509.Signing_request.sign ~valid_from ~valid_until ~extensions
+        ~serial:cacert_serial_number ca_csr pkey cacert_dn in
+    match cert with
+    | Ok cert -> Lwt.return_ok (cert, pkey)
+    | Error (`Msg err) -> Lwt.return_error (`Msg err)
+    | Error (#X509.Validation.signature_error as err) ->
+      Lwt.return_error (R.msgf "%a" X509.Validation.pp_signature_error err)
+
 let add hostname cert pkey ip alpn remote ~pass target =
   (* XXX(dinosaure): hmmmhmmm, we should not do that. *)
   let remote, branch = match String.split_on_char '#' remote with
@@ -136,6 +180,7 @@ let add hostname cert pkey ip alpn remote ~pass target =
   unix_ctx_with_ssh () >>= fun ctx ->
   Store.remote ~ctx remote >>= fun remote ->
   Sync.pull active_branch remote `Set >|= R.reword_error (fun err -> `Pull err) >>? fun _ ->
+  get_certificate_and_pkey ~hostname cert pkey >>? fun (cert, pkey) ->
   let v = { Certificate.cert; pkey; ip; alpn; } in
   let info () =
     let date = Int64.of_float (Unix.gettimeofday ())
@@ -144,23 +189,38 @@ let add hostname cert pkey ip alpn remote ~pass target =
   Store.set ~info active_branch [ Domain_name.to_string hostname ] v
   >|= R.reword_error (fun err -> `Set err) >>? fun _ ->
   Sync.push active_branch remote >|= R.reword_error (fun err -> `Push err) >>? fun _ ->
-  upgrade ~pass target
+  match pass, target with
+  | Some pass, Some target -> upgrade ~pass target
+  | Some _, None | None, Some _ ->
+    Lwt.return_error (`Invalid_arguments "You must provide a password and the IP address of the contruno unikernel")
+  | None, None -> Lwt.return_ok ()
 
 let pp_sockaddr ppf = function
   | Unix.ADDR_UNIX socket -> Fmt.pf ppf "%s" socket
   | Unix.ADDR_INET (inet_addr, port) -> Fmt.pf ppf "%s:%d" (Unix.string_of_inet_addr inet_addr) port
 
-let run _ hostname (_, cert) (_, pkey) ip alpn remote pass target =
+let run _ hostname cert pkey ip alpn remote pass target =
+  let cert = Option.map snd cert in
+  let pkey = Option.map snd pkey in
   match Lwt_main.run (add hostname cert pkey ip alpn remote ~pass target) with
   | Ok () -> `Ok ()
+  | Error (`Msg err) -> `Error (false, Fmt.str "%s." err)
   | Error (`Pull _err) -> `Error (false, Fmt.str "Unreachable Git repository.")
   | Error (`Set _err) -> `Error (false, Fmt.str "Unable to locally set the store.")
   | Error (`Push _err) -> `Error (false, Fmt.str "Unallowed to push to %s." remote)
-  | Error (`Unix_error _) -> `Error (false, Fmt.str "Impossible to upgrade the unikernel %s." (Unix.string_of_inet_addr target))
+  | Error (`Unix_error _) ->
+    let target = Option.get target in
+    (* XXX(dinosaure): this error can occur only if [target] is given. *)
+    `Error (false, Fmt.str "Impossible to upgrade the unikernel %s." (Unix.string_of_inet_addr target))
+  | Error (`Invalid_arguments err) -> `Error (true, Fmt.str "%s." err)
 
 open Cmdliner
 
-let hostname = Arg.conv (Domain_name.of_string, Domain_name.pp)
+let hostname =
+  let of_string str =
+    let open Rresult in
+    Domain_name.(of_string str >>= host) in
+  Arg.conv (of_string, Domain_name.pp)
 
 let certificate_of_file fpath =
   let ic = open_in (Fpath.to_string fpath) in
@@ -221,11 +281,11 @@ let hostname =
 
 let certificate =
   let doc = "The PEM certificate used to initiate the TLS connection." in
-  Arg.(required & opt (some certificate_as_a_file) None & info [ "c"; "cert"; "certificate" ] ~doc)
+  Arg.(value & opt (some certificate_as_a_file) None & info [ "c"; "cert"; "certificate" ] ~doc)
 
 let private_key =
   let doc = "The PEM private key used to initiate the TLS connection." in
-  Arg.(required & opt (some private_key_as_a_file) None & info [ "p"; "private-key" ] ~doc)
+  Arg.(value & opt (some private_key_as_a_file) None & info [ "p"; "private-key" ] ~doc)
 
 let ip =
   let doc = "The IP of the website." in
@@ -241,11 +301,11 @@ let remote =
 
 let pass =
   let doc = "The passphrase to upgrade the unikernel." in
-  Arg.(required & opt (some string) None & info [ "pass" ] ~doc)
+  Arg.(value & opt (some string) None & info [ "pass" ] ~doc)
 
 let target =
-  let doc = "The IP address of the unikernel." in
-  Arg.(required & opt (some inet_addr) None & info [ "t"; "target" ] ~doc)
+  let doc = "The IP address of the contruno unikernel." in
+  Arg.(value & opt (some inet_addr) None & info [ "t"; "target" ] ~doc)
 
 let common_options = "COMMON OPTIONS"
 

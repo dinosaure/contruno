@@ -102,7 +102,7 @@ module Make
 
   let thread_for http (certificate, pk) ?tries ?production
     ?email ?account_seed ?certificate_seed
-    f stackv4v6 =
+    upgrade stackv4v6 =
       let hostnames = X509.Certificate.hostnames certificate in
       match X509.Host.Set.elements hostnames with
       | [] ->
@@ -119,17 +119,21 @@ module Make
           let diff = Ptime.diff from now in
           let diff = Ptime.Span.to_float_s diff *. 1e9 in
           let diff = Int64.of_float diff in
-          `Ready (Time.sleep_ns diff >>= fun () -> f (Ok (`Single ([ certificate ], pk))))
+          (fun `Ready -> Time.sleep_ns diff >>= fun () ->
+                  upgrade (Ok (`Single ([ certificate ], pk))) >>= fun f -> f `Ready)
         | true, true ->
           let diff = Ptime.diff until now in
           let diff = Ptime.Span.to_float_s diff *. 1e9 in
           let diff = Int64.of_float diff in
-          `Ready (Time.sleep_ns diff >>= fun () -> get_certificate_for http
+          (fun `Ready -> Time.sleep_ns diff >>= fun () -> get_certificate_for http
             ?tries ?production ~hostname
-            ?email ?account_seed ?certificate_seed stackv4v6 >>= f)
+            ?email ?account_seed ?certificate_seed stackv4v6 >>= fun new_certificate ->
+                     (upgrade new_certificate) >>= fun f -> f `Ready)
         | true, false ->
-          `Ready (get_certificate_for http
+          (fun `Ready -> get_certificate_for http
             ?tries ?production ~hostname
-            ?email ?account_seed ?certificate_seed stackv4v6 >>= f)
-        | false, false -> `Ready (f (Error (`Invalid_certificate certificate)))
+            ?email ?account_seed ?certificate_seed stackv4v6 >>= fun new_certificate ->
+                    (upgrade new_certificate) >>= fun f -> f `Ready)
+        | false, false -> (fun `Ready ->
+                        upgrade (Error (`Invalid_certificate certificate)) >>= fun f -> f `Ready)
 end
