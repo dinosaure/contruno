@@ -126,7 +126,7 @@ let prefix = X509.Distinguished_name.[ Relative_distinguished_name.singleton (CN
 let cacert_dn = X509.Distinguished_name.(prefix @ [ Relative_distinguished_name.singleton (CN "Ephemeral CA for Contruno") ])
 let cacert_serial_number = Z.zero
 
-let get_certificate_and_pkey ?seed ~hostname cert pkey = match cert, pkey with
+let get_certificate_and_pkey ?seed:_ ~hostname cert pkey = match cert, pkey with
   | Some cert, Some pkey when X509.Certificate.supports_hostname cert hostname ->
     Lwt.return_ok (cert, pkey)
   | Some _, Some _ ->
@@ -137,8 +137,7 @@ let get_certificate_and_pkey ?seed ~hostname cert pkey = match cert, pkey with
     let pkey = match pkey with
       | Some pkey -> pkey
       | None ->
-        let g = Mirage_crypto_rng.(create ?seed (module Fortuna)) in
-        `RSA (Mirage_crypto_pk.Rsa.generate ~g ~bits:4096 ()) in
+        `RSA (Mirage_crypto_pk.Rsa.generate ~bits:4096 ()) in
     let valid_from = Ptime.v (Ptime_clock.now_d_ps ()) |> fun v -> Ptime.sub_span v _10d |> Option.get in
     let valid_until = Ptime.add_span valid_from _5d |> Option.get in
     let cert =
