@@ -26,7 +26,15 @@ module Make
     -> ?certificate_seed:string
     -> ((Tls.Config.own_cert, [> `Certificate_unavailable_for of [ `host ] Domain_name.t
                               |  `Invalid_certificate of X509.Certificate.t ]) result
-        -> 'a Lwt.t)
+        -> ([ `Ready ] -> 'a Lwt.t) Lwt.t)
     -> Stack.t
-    -> [ `Ready of 'a Lwt.t ]
+    -> ([ `Ready ] -> 'a Lwt.t)
+  (** [thread_for mutex (certificate, pk) k stack : ([ `Ready ] -> 'a Lwt.t)]
+      creates a function that waits until the end of the given certificate
+      (its expiration) to execute the continuation. If the certificate is
+      active or expired, a time-out request to let's encrypt is made and the
+      result is returned to the continuation.
+
+      A mutex is required to safely launch a server on [*:80] (and do the
+      let's encrypt challenge). *)
 end

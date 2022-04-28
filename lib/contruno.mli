@@ -45,6 +45,9 @@ module Make
 
   val tls_protocol : (endpoint, flow) Mimic.protocol
 
+  type upgrader =
+    [ `Upgrader of Art.key -> Certificate.t -> ([ `Ready ] -> unit Lwt.t) Lwt.t ]
+
   val initialize
     :  Lwt_mutex.t
     -> ctx:Mimic.ctx
@@ -52,7 +55,23 @@ module Make
     -> remote:string
     -> cfg
     -> Stack.t
-    -> ((Ipaddr.t * int, flow) Hashtbl.t * Certificate.t Art.t * [ `Ready of unit Lwt.t ] list) Lwt.t
+    -> ((Ipaddr.t * int, flow) Hashtbl.t
+        * Certificate.t Art.t
+        * ([ `raw ] Domain_name.t * ([ `Ready ] -> unit Lwt.t) Lwt.t) list
+        * upgrader) Lwt.t
+
+  val create_upgrader
+    :  Lwt_mutex.t
+    -> (Ipaddr.t * int, flow) Hashtbl.t
+    -> Certificate.t Art.t
+    -> ctx:Mimic.ctx
+    -> branch:string
+    -> remote:string
+    -> cfg
+    -> Stack.t
+    -> Art.key
+    -> Certificate.t
+    -> ([ `Ready ] -> unit Lwt.t) Lwt.t
 
   type stack
 
@@ -71,6 +90,7 @@ module Make
     -> branch:string
     -> remote:string
     -> Certificate.t Art.t
+    -> (([ `raw ] Domain_name.t * Certificate.t) option -> unit)
     -> Stack.t
     -> unit
 end
