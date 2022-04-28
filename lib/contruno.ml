@@ -455,8 +455,10 @@ module Make
     Art.insert tree (Art.key (Domain_name.to_string hostname)) v ;
     Lwt.return_unit
 
-  let rec create_upgrader http conns tree ~ctx ~branch ~remote cfg stackv4v6 (hostname : Art.key) old_certificate : ([ `Ready ] -> unit Lwt.t) Lwt.t =
+  let rec create_upgrader http conns tree ~ctx ~branch ~remote cfg stackv4v6 =
+    fun (hostname : Art.key) old_certificate : ([ `Ready ] -> unit Lwt.t) Lwt.t ->
     let { production; email; account_seed; certificate_seed; } = cfg in
+    Log.debug (fun m -> m "We create a certificate upgrader for %s." (hostname :> string)) ;
     let f = upgrade_and_renegociate http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname old_certificate in
     try
       let fn = Certif.thread_for http
@@ -475,7 +477,16 @@ module Make
       renegociation tree conns >>= fun () ->
       set ~ctx branch remote tree (Domain_name.of_string_exn (hostname :> string)) v >>= fun () ->
       create_upgrader http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname v
-    | _ -> assert false
+    | Error (`Msg err) ->
+      Log.err (fun m -> m "Got an error for %s when we re-asking a new certificate: %s." (hostname :> string) err) ;
+      Lwt.return (fun `Ready -> Lwt.return_unit)
+    | Error (`Certificate_unavailable_for hostname) ->
+      Log.err (fun m -> m "Certificate unavailable for: %a" Domain_name.pp hostname) ;
+      Lwt.return (fun `Ready -> Lwt.return_unit)
+    | Error (`Invalid_certificate cert) ->
+      Log.err (fun m -> m "Invalid certificate: %a." X509.Certificate.pp cert) ;
+      Lwt.return (fun `Ready -> Lwt.return_unit)
+    | Ok _ -> assert false
 
   type upgrader =
     [ `Upgrader of Art.key -> Certificate.t -> ([ `Ready ] -> unit Lwt.t) Lwt.t ]
@@ -594,7 +605,9 @@ module Make
       check ~pass flow >>= fun run ->
       Stack.TCP.close flow >>= fun () ->
       match run with
-      | true -> reload ~ctx ~branch ~remote tree push
+      | true ->
+        Log.debug (fun m -> m "Start to reload our Git repository") ;
+        reload ~ctx ~branch ~remote tree push
       | false -> Lwt.return_unit in
     Stack.TCP.listen (Stack.tcp stackv4v6) ~port:9418 listen
 end
