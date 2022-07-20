@@ -19,6 +19,7 @@ depends: [
   "ca-certs-nss"
   "dns-client"
   "ipaddr"
+  "tcpip"
   "irmin-mirage-git" {>= "3.0.0"}
   "mirage-clock"
   "mirage-random"

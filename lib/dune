@@ -8,7 +8,7 @@
   dns-client.mirage
   paf.mirage
   paf-le
-  mirage-stack
+  tcpip
   mirage-clock
   mirage-time
   mirage-random))
