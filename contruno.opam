@@ -29,3 +29,8 @@ depends: [
   "paf-le"           {>= "0.0.9"}
   "x509"
 ]
+
+pin-depends: [
+  [ "paf.dev" "git+https://github.com/dinosaure/paf-le-chien.git#c44dbb29e23449e247ffeb06d865c9a2965fcbd0" ]
+  [ "paf-le.dev" "git+https://github.com/dinosaure/paf-le-chien.git#c44dbb29e23449e247ffeb06d865c9a2965fcbd0" ]
+]
