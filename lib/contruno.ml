@@ -48,9 +48,11 @@ let reload ~ctx ~branch ~remote tree push =
   let config = Irmin_git.config "." in
   Store.Repo.v config >>= fun repository -> Store.of_branch repository branch >>= fun active_branch ->
   let upstream = Store.remote ~ctx remote in
+  Log.debug (fun m -> m "Start to pull Git repository.");
   Sync.pull active_branch upstream `Set
   >|= failwith_error_pull
   >>= fun _ ->
+  Log.debug (fun m -> m "Repository pulled.");
   Store.list active_branch [] >>= fun lst ->
   let f acc (name, k) = match Store.Tree.destruct k, Domain_name.of_string name with
     | `Node _, _ -> Lwt.return acc
@@ -64,9 +66,11 @@ let reload ~ctx ~branch ~remote tree push =
         Lwt.return ((hostname, certificate) :: acc)
       | _ -> Lwt.return acc in
   Lwt_list.fold_left_s f [] lst >>= fun certificates ->
+  Log.debug (fun m -> m "Re-aggregate %d certificates." (List.length certificates));
   let f (hostname, certificate) =
     ( try Art.remove tree (Art.key (Domain_name.to_string hostname)) with _ -> () ) ;
     Art.insert tree (Art.key (Domain_name.to_string hostname)) certificate ;
+    Log.debug (fun m -> m "Re-update certificate for %a." Domain_name.pp hostname);
     push (Some (hostname, certificate)) in
   List.iter f certificates ; Lwt.return_unit
 
@@ -309,7 +313,7 @@ module Make
   (Pclock : Mirage_clock.PCLOCK)
   (Stack : Tcpip.Stack.V4V6)
 = struct
-  module Log = (val (Logs.src_log (Logs.Src.create "contruno")))
+  module Log = (val (Logs.src_log (Logs.Src.create "contruno.unikernel")))
   module Paf = Paf_mirage.Make (Time) (Stack.TCP)
 
   module TLS = struct
@@ -372,7 +376,9 @@ module Make
         (* XXX(dinosaure): see [aggregate_certificates]. *) in
     Certif.get_certificate_for http ~tries:10
       ~production ~hostname ?email ?account_seed ?certificate_seed stackv4v6 >>= function
-    | Ok (`Single ([ cert ], pkey)) ->
+    | Ok (`Single (cert :: _, pkey))
+    | Ok (`Multiple ((cert :: _, pkey) :: _))
+    | Ok (`Multiple_default ((cert :: _, pkey), _)) ->
       ( try Art.remove tree (Art.key (Domain_name.to_string hostname)) with _ -> () ) ;
       Art.insert tree (Art.key (Domain_name.to_string hostname))
         { Certificate.cert; pkey; ip= invalid_certificate.Certificate.ip;
@@ -380,7 +386,10 @@ module Make
       let ip = invalid_certificate.Certificate.ip in
       let alpn = invalid_certificate.Certificate.alpn in
       Lwt.return (`Set (hostname, { Certificate.cert; pkey; ip; alpn; }))
-    | Ok _ -> Lwt.return (`Delete hostname) (* TODO *)
+    | Ok ( `Single ([], _) | `Multiple [] | `Multiple (([], _) :: _)
+         | `Multiple_default (([], _), _) | `None) ->
+      Log.warn (fun m -> m "We did not got a certificate for %a." Domain_name.pp hostname);
+      Lwt.return (`Delete hostname) (* TODO *)
     | Error (`Certificate_unavailable_for hostname) ->
       ( try Art.remove tree (Art.key (Domain_name.to_string hostname)) with _ -> () ) ;
       Lwt.return (`Delete hostname)
@@ -470,7 +479,9 @@ module Make
       Lwt.return (fun `Ready -> Lwt.return_unit)
   and upgrade_and_renegociate http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname old_certificate
     new_certificate : ([ `Ready ] -> unit Lwt.t) Lwt.t = match new_certificate with
-    | Ok (`Single ([ cert ], pkey)) ->
+    | Ok (`Single (cert :: _, pkey))
+    | Ok (`Multiple ((cert :: _, pkey) :: _))
+    | Ok (`Multiple_default ((cert :: _, pkey), _)) ->
       ( try Art.remove tree hostname with _ -> () ) ;
       let v = { Certificate.cert; pkey; ip= old_certificate.Certificate.ip;
           alpn= old_certificate.Certificate.alpn; } in
@@ -486,7 +497,10 @@ module Make
     | Error (`Invalid_certificate cert) ->
       Log.err (fun m -> m "Invalid certificate: %a." X509.Certificate.pp cert) ;
       Lwt.return (fun `Ready -> Lwt.return_unit)
-    | Ok _ -> assert false
+    | Ok ( `Single ([], _) | `Multiple [] | `Multiple (([], _) :: _)
+         | `Multiple_default (([], _), _) | `None) ->
+      Log.err (fun m -> m "We did not receive any certificates.") ;
+      Lwt.return (fun `Ready -> Lwt.return_unit)
 
   type upgrader =
     [ `Upgrader of Art.key -> Certificate.t -> ([ `Ready ] -> unit Lwt.t) Lwt.t ]
@@ -559,28 +573,32 @@ module Make
       let ipaddr, port = Stack.TCP.dst tcp in
       Log.debug (fun m -> m "Got a TCP/IP connection from %a:%d." Ipaddr.pp ipaddr port) ;
       let f _ { Certificate.cert; pkey; _ } acc = ([ cert ], pkey) :: acc in
-      let certs = Art.iter ~f [] tree in
-      let cfg = Tls.Config.server
-        ~alpn_protocols:(alpn_protocols tree)
-        ~certificates:(`Multiple certs) () in
-      Log.debug (fun m -> m "Upgrade the TCP/IP connection with TLS.") ;
-      TLS.server_of_flow cfg tcp >>= function
-      | Ok flow ->
-        ( match hostname_of_flow flow with
-        | Some hostname ->
-          let edn = Paf.TCP.dst tcp in
-          let rd = Lwt_mutex.create () and wr = Lwt_mutex.create () in
-          let finalizer () = Hashtbl.remove conns edn in
-          let flow = { TLS.edn; rd; wr; flow; hostname; finalizer; } in
-          Hashtbl.add conns edn flow ;
-          Lwt.return_ok (edn, flow)
-        | None ->
-          let err = R.msgf "The TLS handshake missing the hostname" in
-          Paf.TCP.close tcp >>= fun () -> Lwt.return_error err )
-      | Error `Closed -> Lwt.return_error (`Write `Closed)
-      | Error err ->
-        let err = R.msgf "%a" TLS.pp_write_error err in
-        Paf.TCP.close tcp >>= fun () -> Lwt.return_error err in
+      match Art.iter ~f [] tree with
+      | [] -> Paf.TCP.close tcp >>= fun () ->
+        Log.err (fun m -> m "No certificates available");
+        Lwt.return_error (R.msgf "No certificates available")
+      | certs ->
+        let cfg = Tls.Config.server
+          ~alpn_protocols:(alpn_protocols tree)
+          ~certificates:(`Multiple certs) () in
+        Log.debug (fun m -> m "Upgrade the TCP/IP connection with TLS.") ;
+        TLS.server_of_flow cfg tcp >>= function
+        | Ok flow ->
+          ( match hostname_of_flow flow with
+          | Some hostname ->
+            let edn = Paf.TCP.dst tcp in
+            let rd = Lwt_mutex.create () and wr = Lwt_mutex.create () in
+            let finalizer () = Hashtbl.remove conns edn in
+            let flow = { TLS.edn; rd; wr; flow; hostname; finalizer; } in
+            Hashtbl.add conns edn flow ;
+            Lwt.return_ok (edn, flow)
+          | None ->
+            let err = R.msgf "The TLS handshake missing the hostname" in
+            Paf.TCP.close tcp >>= fun () -> Lwt.return_error err )
+        | Error `Closed -> Lwt.return_error (`Write `Closed)
+        | Error err ->
+          let err = R.msgf "%a" TLS.pp_write_error err in
+          Paf.TCP.close tcp >>= fun () -> Lwt.return_error err in
     let close _ = Lwt.return_unit in
     Alpn.service info handshake Paf.accept close
       ~error_handler
