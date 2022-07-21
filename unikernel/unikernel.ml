@@ -12,6 +12,7 @@ module Make
   (_ : sig end)
 = struct
   include Contruno.Make (Random) (Time) (Mclock) (Pclock) (Stack)
+  module Log = (val (Logs.src_log (Logs.Src.create "contruno.main")))
 
   let error_handler _peer ?request:_ _error _write = ()
 
@@ -33,27 +34,33 @@ module Make
         ; stop ] >>= function
       | `Stop -> Lwt.return_unit
       | `Launch th ->
+        Log.debug (fun m -> m "Launch a new thread.");
         begin Lwt.async @@ fun () -> th `Ready end ;
         launch_jobs () in
     let fill_jobs () =
+      Log.debug (fun m -> m "Waiting for a new certificate.");
       Lwt_stream.get stream >>= function
       | Some (hostname, v) ->
+        Log.debug (fun m -> m "Launch a renegociation thread for %a." Domain_name.pp hostname);
         Lwt_mutex.with_lock mutex @@ fun () ->
         if Hashset.mem set hostname
-        then Lwt.return_unit
+        then ( Log.debug (fun m -> m "A renegociation thread already exists for %a." Domain_name.pp hostname)
+             ; Lwt.return_unit )
         else ( Hashset.add set hostname
              ; upgrader (Art.unsafe_key (Domain_name.to_string hostname)) v >>= fun th ->
                Lwt_condition.signal condition (`Launch th) ;
                Lwt.return_unit )
       | None -> (* XXX(dinosaure): the stream is infinite, we should never stop. *)
+        Log.err (fun m -> m "The stream of new certificates was done.");
         Lwt.wakeup_later waker `Stop ;
         Lwt.return_unit in
-    let first_fill =
+    let first_fill reneg_ths =
       Lwt_list.iter_s begin fun (hostname, tth) ->
         Lwt_mutex.with_lock mutex @@ fun () ->
         Hashset.add set hostname ;
         tth >>= fun th -> Lwt_condition.signal condition (`Launch th) ;
-        Lwt.return_unit end in
+        Lwt.return_unit end reneg_ths >|= fun () ->
+      Log.debug (fun m -> m "Threads for valid certificates are launched!"); in
     Lwt.join [ first_fill reneg_ths; launch_jobs (); fill_jobs () ] >>= fun () ->
     Lwt_switch.turn_off https
 

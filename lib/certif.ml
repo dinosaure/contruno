@@ -14,7 +14,7 @@ module Make
   module Let = LE.Make (Time) (Stack)
   module Nss = Ca_certs_nss.Make (Pclock)
   module Paf = Paf_mirage.Make (Time) (Stack.TCP)
-  module Log = (val (Logs.src_log (Logs.Src.create "contruno")))
+  module Log = (val (Logs.src_log (Logs.Src.create "contruno.certif")))
 
   let authenticator = R.failwith_error_msg (Nss.authenticator ())
 
@@ -52,7 +52,7 @@ module Make
   ;;
 
   let get_certificate
-    ~stop ?(production= false) ~hostname ?email ?account_seed ?certificate_seed stackv4v6 =
+    ?(tries= 10) ~stop ?(production= false) ~hostname ?email ?account_seed ?certificate_seed stackv4v6 =
     let cfg =
       { Let.hostname
       ; Let.email= email
@@ -65,10 +65,10 @@ module Make
     let ctx = Let.ctx
       ~gethostbyname ~authenticator
       (DNS.create stackv4v6) stackv4v6 in
-    Let.provision_certificate ~production cfg ctx >>= fun certificates ->
+    Let.provision_certificate ~tries ~production cfg ctx >>= fun certificates ->
     Lwt_switch.turn_off stop >>= fun () -> Lwt.return certificates
 
-  let rec get_certificate_for http
+  let get_certificate_for http
     :  ?tries:int
     -> ?production:bool
     -> hostname:[ `host ] Domain_name.t
@@ -77,7 +77,7 @@ module Make
     -> ?certificate_seed:string
     -> Stack.t
     -> (Tls.Config.own_cert, [> `Certificate_unavailable_for of [ `host ] Domain_name.t ]) result Lwt.t
-    = fun ?(tries= 1)
+    = fun ?(tries= 10)
           ?production ~hostname
           ?email ?account_seed ?certificate_seed
           stackv4v6 ->
@@ -91,18 +91,14 @@ module Make
       Lwt_switch.with_switch @@ fun stop ->
       let `Initialized th = Paf.serve ~stop service t in
       Lwt.both th
-        (get_certificate ~stop ?production ~hostname
+        (get_certificate ~tries ~stop ?production ~hostname
          ?email ?account_seed ?certificate_seed
          stackv4v6)
     end >>= function
     | ((), (Ok _ as certificate)) -> Lwt.return certificate
-    | ((), Error (`Msg err)) when tries <= 0 ->
+    | ((), Error (`Msg err)) ->
       Log.err (fun m -> m "Got an error when we tried to get a new certificate: %s." err) ;
       Lwt.return_error (`Certificate_unavailable_for hostname)
-    | ((), Error _) ->
-      get_certificate_for http ~tries:(pred tries) ?production ~hostname
-        ?email ?account_seed ?certificate_seed
-        stackv4v6
     end @@ fun exn ->
     Log.err (fun m -> m "Unexpected exception when we tried to get a new certificate: %S."
       (Printexc.to_string exn)) ;
