@@ -18,14 +18,14 @@ module Make
 
   val thread_for 
     :  Lwt_mutex.t
-    -> (X509.Certificate.t * X509.Private_key.t)
+    -> Value.own_cert
     -> ?tries:int
     -> ?production:bool
     -> ?email:Emile.mailbox
     -> ?account_seed:string
     -> ?certificate_seed:string
     -> ((Tls.Config.own_cert, [> `Certificate_unavailable_for of [ `host ] Domain_name.t
-                              |  `Invalid_certificate of X509.Certificate.t ]) result
+                              |  `Invalid_certificate of Value.own_cert ]) result
         -> ([ `Ready ] -> 'a Lwt.t) Lwt.t)
     -> Stack.t
     -> ([ `Ready ] -> 'a Lwt.t)

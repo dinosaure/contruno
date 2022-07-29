@@ -36,8 +36,7 @@ let aggregate_certificates active_branch =
     | `Contents _, Error _ -> Lwt.return acc
     | `Contents _, Ok hostname ->
       Store.get active_branch [ name ] >>= fun certificate ->
-      let hostnames' = X509.Certificate.hostnames certificate.cert in
-      let hostnames' = X509.Host.Set.elements hostnames' in
+      let hostnames' = Certificate.hostnames_of_own_cert certificate.own_cert in
       match hostnames' with
       | [ `Strict, hostname' ] when Domain_name.equal hostname hostname' ->
         Lwt.return (certificate :: acc)
@@ -59,8 +58,7 @@ let reload ~ctx ~branch ~remote tree push =
     | `Contents _, Error _ -> Lwt.return acc
     | `Contents _, Ok hostname ->
       Store.get active_branch [ name ] >>= fun certificate ->
-      let hostnames' = X509.Certificate.hostnames certificate.cert in
-      let hostnames' = X509.Host.Set.elements hostnames' in
+      let hostnames' = Certificate.hostnames_of_own_cert certificate.own_cert in
       match hostnames' with
       | [ `Strict, hostname' ] when Domain_name.equal hostname hostname' ->
         Lwt.return ((hostname, certificate) :: acc)
@@ -346,13 +344,33 @@ module Make
   module Certif = Certif.Make
     (Random) (Time) (Mclock) (Pclock) (Stack)
 
-  let valids_and_invalids ~now { Certificate.cert; _ } =
-    let from, until = X509.Certificate.validity cert in
+  let valids_and_invalids ~now { Certificate.own_cert; _ } =
+    let from, until =
+      let times = match own_cert with
+        | `Single (certs, _) -> List.map X509.Certificate.validity certs
+        | `Multiple certchains ->
+          let certs = List.map (fun (certs, _) -> certs) certchains in
+          let certs = List.concat certs in
+          List.map X509.Certificate.validity certs
+        | `Multiple_default (certchain, certchains) ->
+          let certs = List.map (fun (certs, _) -> certs) (certchain :: certchains) in
+          let certs = List.concat certs in
+          List.map X509.Certificate.validity certs in
+      let acc = List.hd times in
+      List.fold_left
+        (fun (from', until') (from, until) ->
+           if Ptime.is_earlier until ~than:until'
+           then (from, until) else (from', until'))
+        acc (List.tl times) in
     Ptime.is_earlier from ~than:now && Ptime.is_later until ~than:now
 
   let renegociation tree conns =
     let certs = Art.iter
-      ~f:(fun _ { Certificate.cert; pkey; _ } acc -> ([ cert ], pkey) :: acc) [] tree in
+      ~f:(fun _ { Certificate.own_cert; _ } acc -> match own_cert with
+        | `Single certchain -> certchain :: acc
+        | `Multiple certchains -> certchains @ acc
+        | `Multiple_default (certchain, certchains) ->
+          certchain :: (certchains @ acc)) [] tree in
     let reneg flow =
       Lwt_mutex.with_lock flow.TLS.rd @@ fun () ->
       Lwt_mutex.with_lock flow.TLS.wr @@ fun () ->
@@ -369,27 +387,23 @@ module Make
   let reasking_certificate http tree cfg invalid_certificate stackv4v6 =
     let { production; email; account_seed; certificate_seed; } = cfg in
     let hostname =
-      match X509.Certificate.hostnames invalid_certificate.Certificate.cert
-            |> X509.Host.Set.elements with
+      match Certificate.hostnames_of_own_cert invalid_certificate.Certificate.own_cert with
       | [ `Strict, hostname ] -> hostname
       | _ -> assert false
         (* XXX(dinosaure): see [aggregate_certificates]. *) in
     Certif.get_certificate_for http ~tries:10
       ~production ~hostname ?email ?account_seed ?certificate_seed stackv4v6 >>= function
-    | Ok (`Single (cert :: _, pkey))
-    | Ok (`Multiple ((cert :: _, pkey) :: _))
-    | Ok (`Multiple_default ((cert :: _, pkey), _)) ->
+    | Ok `None ->
+      Log.warn (fun m -> m "We did not got a certificate for %a." Domain_name.pp hostname);
+      Lwt.return (`Delete hostname) (* TODO *)
+    | Ok (#Certificate.own_cert as own_cert) ->
       ( try Art.remove tree (Art.key (Domain_name.to_string hostname)) with _ -> () ) ;
       Art.insert tree (Art.key (Domain_name.to_string hostname))
-        { Certificate.cert; pkey; ip= invalid_certificate.Certificate.ip;
+        { Certificate.own_cert; ip= invalid_certificate.Certificate.ip;
           alpn= invalid_certificate.Certificate.alpn; } ;
       let ip = invalid_certificate.Certificate.ip in
       let alpn = invalid_certificate.Certificate.alpn in
-      Lwt.return (`Set (hostname, { Certificate.cert; pkey; ip; alpn; }))
-    | Ok ( `Single ([], _) | `Multiple [] | `Multiple (([], _) :: _)
-         | `Multiple_default (([], _), _) | `None) ->
-      Log.warn (fun m -> m "We did not got a certificate for %a." Domain_name.pp hostname);
-      Lwt.return (`Delete hostname) (* TODO *)
+      Lwt.return (`Set (hostname, { Certificate.own_cert; ip; alpn; }))
     | Error (`Certificate_unavailable_for hostname) ->
       ( try Art.remove tree (Art.key (Domain_name.to_string hostname)) with _ -> () ) ;
       Lwt.return (`Delete hostname)
@@ -398,9 +412,9 @@ module Make
       Lwt.return (`Delete hostname)
 
   let pp_action ppf = function
-    | `Set (hostname, { Certificate.cert; ip; _ }) ->
-      Fmt.pf ppf "Update certificate of %a (%a) to %a"
-        Domain_name.pp hostname Z.pp_print (X509.Certificate.serial cert) Ipaddr.pp ip
+    | `Set (hostname, { Certificate.ip; _ }) ->
+      Fmt.pf ppf "Update certificate of %a to %a"
+        Domain_name.pp hostname Ipaddr.pp ip
     | `Delete hostname ->
       Fmt.pf ppf "Delete certificate of %a" Domain_name.pp hostname
 
@@ -432,8 +446,8 @@ module Make
     Log.debug (fun m -> m "%d invalid certificate(s) and %d valid certificate(s)."
       (List.length invalids) (List.length valids)) ;
     let tree = Art.make () in
-    List.iter (fun ({ Certificate.cert; _ } as v) ->
-      let hostname = match X509.Certificate.hostnames cert |> X509.Host.Set.elements with
+    List.iter (fun ({ Certificate.own_cert; _ } as v) ->
+      let hostname = match Certificate.hostnames_of_own_cert own_cert with
         | [ `Strict, hostname ] -> hostname
         | _ -> assert false (* XXX(dinosaure): see [aggregate_certificates]. *) in
       Art.insert tree (Art.key (Domain_name.to_string hostname)) v) valids ;
@@ -471,7 +485,7 @@ module Make
     let f = upgrade_and_renegociate http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname old_certificate in
     try
       let fn = Certif.thread_for http
-        (old_certificate.Certificate.cert, old_certificate.Certificate.pkey)
+        old_certificate.Certificate.own_cert
         ~production ?email ?account_seed ?certificate_seed f stackv4v6 in
       Lwt.return fn
     with exn ->
@@ -479,11 +493,9 @@ module Make
       Lwt.return (fun `Ready -> Lwt.return_unit)
   and upgrade_and_renegociate http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname old_certificate
     new_certificate : ([ `Ready ] -> unit Lwt.t) Lwt.t = match new_certificate with
-    | Ok (`Single (cert :: _, pkey))
-    | Ok (`Multiple ((cert :: _, pkey) :: _))
-    | Ok (`Multiple_default ((cert :: _, pkey), _)) ->
+    | Ok (#Certificate.own_cert as own_cert) ->
       ( try Art.remove tree hostname with _ -> () ) ;
-      let v = { Certificate.cert; pkey; ip= old_certificate.Certificate.ip;
+      let v = { Certificate.own_cert; ip= old_certificate.Certificate.ip;
           alpn= old_certificate.Certificate.alpn; } in
       renegociation tree conns >>= fun () ->
       set ~ctx branch remote tree (Domain_name.of_string_exn (hostname :> string)) v >>= fun () ->
@@ -494,11 +506,10 @@ module Make
     | Error (`Certificate_unavailable_for hostname) ->
       Log.err (fun m -> m "Certificate unavailable for: %a" Domain_name.pp hostname) ;
       Lwt.return (fun `Ready -> Lwt.return_unit)
-    | Error (`Invalid_certificate cert) ->
-      Log.err (fun m -> m "Invalid certificate: %a." X509.Certificate.pp cert) ;
+    | Error (`Invalid_certificate _own_cert) ->
+      Log.err (fun m -> m "Invalid certificate for %s." (hostname :> string)) ;
       Lwt.return (fun `Ready -> Lwt.return_unit)
-    | Ok ( `Single ([], _) | `Multiple [] | `Multiple (([], _) :: _)
-         | `Multiple_default (([], _), _) | `None) ->
+    | Ok `None ->
       Log.err (fun m -> m "We did not receive any certificates.") ;
       Lwt.return (fun `Ready -> Lwt.return_unit)
 
@@ -572,15 +583,19 @@ module Make
     let handshake tcp =
       let ipaddr, port = Stack.TCP.dst tcp in
       Log.debug (fun m -> m "Got a TCP/IP connection from %a:%d." Ipaddr.pp ipaddr port) ;
-      let f _ { Certificate.cert; pkey; _ } acc = ([ cert ], pkey) :: acc in
+      let f _ { Certificate.own_cert; _ } acc = match own_cert with
+        | `Single certchain -> certchain :: acc
+        | `Multiple certchains -> certchains @ acc
+        | `Multiple_default (certchain, certchains) ->
+          certchain :: (certchains @ acc) in
       match Art.iter ~f [] tree with
       | [] -> Paf.TCP.close tcp >>= fun () ->
         Log.err (fun m -> m "No certificates available");
         Lwt.return_error (R.msgf "No certificates available")
-      | certs ->
+      | certchains ->
         let cfg = Tls.Config.server
           ~alpn_protocols:(alpn_protocols tree)
-          ~certificates:(`Multiple certs) () in
+          ~certificates:(`Multiple certchains) () in
         Log.debug (fun m -> m "Upgrade the TCP/IP connection with TLS.") ;
         TLS.server_of_flow cfg tcp >>= function
         | Ok flow ->
