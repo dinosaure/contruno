@@ -128,7 +128,7 @@ let cacert_serial_number = Z.zero
 
 let get_certificate_and_pkey ?seed:_ ~hostname cert pkey = match cert, pkey with
   | Some cert, Some pkey when X509.Certificate.supports_hostname cert hostname ->
-    Lwt.return_ok (cert, pkey)
+    Lwt.return_ok (`Single ([ cert ] , pkey))
   | Some _, Some _ ->
     Lwt.return_error (`Invalid_arguments "The given certificate does not support your hostname")
   | Some _, None ->
@@ -158,7 +158,7 @@ let get_certificate_and_pkey ?seed:_ ~hostname cert pkey = match cert, pkey with
       X509.Signing_request.sign ~valid_from ~valid_until ~extensions
         ~serial:cacert_serial_number ca_csr pkey cacert_dn in
     match cert with
-    | Ok cert -> Lwt.return_ok (cert, pkey)
+    | Ok cert -> Lwt.return_ok (`Single ([ cert ], pkey))
     | Error (`Msg err) -> Lwt.return_error (`Msg err)
     | Error (#X509.Validation.signature_error as err) ->
       Lwt.return_error (R.msgf "%a" X509.Validation.pp_signature_error err)
@@ -179,8 +179,8 @@ let add hostname cert pkey ip alpn remote ~pass target =
   unix_ctx_with_ssh () >>= fun ctx ->
   Store.remote ~ctx remote >>= fun remote ->
   Sync.pull active_branch remote `Set >|= R.reword_error (fun err -> `Pull err) >>? fun _ ->
-  get_certificate_and_pkey ~hostname cert pkey >>? fun (cert, pkey) ->
-  let v = { Certificate.cert; pkey; ip; alpn; } in
+  get_certificate_and_pkey ~hostname cert pkey >>? fun own_cert ->
+  let v = { Certificate.own_cert; ip; alpn; } in
   let info () =
     let date = Int64.of_float (Unix.gettimeofday ())
     and mesg = Fmt.str "New certificate for %a added" Domain_name.pp hostname in

@@ -1,9 +1,15 @@
 module Certificate : sig
+  type certchain = Tls.Config.certchain
+
+  type own_cert = 
+    [ `Multiple of certchain list
+    | `Multiple_default of certchain * certchain list
+    | `Single of certchain ]
+
   type t =
-    { cert : X509.Certificate.t
-    ; pkey : X509.Private_key.t
-    ; ip   : Ipaddr.t
-    ; alpn : alpn list }
+    { own_cert : own_cert
+    ; ip       : Ipaddr.t
+    ; alpn     : alpn list }
   and alpn = HTTP_1_1 | H2
 
   include Irmin.Contents.S with type t := t

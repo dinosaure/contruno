@@ -104,11 +104,10 @@ module Make
       (Printexc.to_string exn)) ;
     Lwt.return_error (`Certificate_unavailable_for hostname)
 
-  let thread_for http (certificate, pk) ?tries ?production
+  let thread_for http own_cert ?tries ?production
     ?email ?account_seed ?certificate_seed
     upgrade stackv4v6 =
-      let hostnames = X509.Certificate.hostnames certificate in
-      match X509.Host.Set.elements hostnames with
+      match Value.hostnames_of_own_cert own_cert with
       | [] ->
         Log.err (fun m -> m "The given certificate does not have a hostname.") ;
         Fmt.invalid_arg "Certificate without hostname"
@@ -119,7 +118,24 @@ module Make
         Log.err (fun m -> m "The given certificate handles multiples domains.") ;
         Fmt.invalid_arg "Certificate with multiple domains"
       | [ `Strict, hostname ] ->
-        let from, until = X509.Certificate.validity certificate in
+        (* XXX(dinosaure): Verify how we calculate [from] and [until]. *)
+        let from, until =
+          let times = match own_cert with
+            | `Single (certs, _) -> List.map X509.Certificate.validity certs
+            | `Multiple certchains ->
+              let certs = List.map (fun (certs, _) -> certs) certchains in
+              let certs = List.concat certs in
+              List.map X509.Certificate.validity certs
+            | `Multiple_default (certchain, certchains) ->
+              let certs = List.map (fun (certs, _) -> certs) (certchain :: certchains) in
+              let certs = List.concat certs in
+              List.map X509.Certificate.validity certs in
+          let acc = List.hd times in
+          List.fold_left
+            (fun (from', until') (from, until) ->
+               if Ptime.is_earlier until ~than:until'
+               then (from, until) else (from', until'))
+            acc (List.tl times) in
         let now = Ptime.v (Pclock.now_d_ps ()) in
         match Ptime.is_earlier from ~than:now, Ptime.is_later until ~than:now with
         | false, true ->
@@ -129,7 +145,7 @@ module Make
           let diff = Ptime.Span.to_float_s diff *. 1e9 in
           let diff = Int64.of_float diff in
           (fun `Ready -> Time.sleep_ns diff >>= fun () ->
-                  upgrade (Ok (`Single ([ certificate ], pk))) >>= fun f -> f `Ready)
+                  upgrade (Ok (own_cert :> Tls.Config.own_cert)) >>= fun f -> f `Ready)
         | true, true ->
           let diff = Ptime.diff until now in
           Log.debug (fun m -> m "Prepare a thread waiting %a for %a." Ptime.Span.pp diff
@@ -152,5 +168,5 @@ module Make
           Log.err (fun m -> m "Creation (%a) and expiration (%a) of the given certificate are wrong."
             Ptime.pp from Ptime.pp until) ;
           (fun `Ready ->
-             upgrade (Error (`Invalid_certificate certificate)) >>= fun f -> f `Ready)
+             upgrade (Error (`Invalid_certificate own_cert)) >>= fun f -> f `Ready)
 end
