@@ -63,7 +63,7 @@ module Make
     -> Stack.t
     -> ((Ipaddr.t * int, flow) Hashtbl.t
         * Certificate.t Art.t
-        * ([ `raw ] Domain_name.t * ([ `Ready ] -> unit Lwt.t) Lwt.t) list
+        * ([ `host ] Domain_name.t * ([ `Ready ] -> unit Lwt.t) Lwt.t) list
         * upgrader) Lwt.t
 
   val create_upgrader
@@ -96,7 +96,7 @@ module Make
     -> branch:string
     -> remote:string
     -> Certificate.t Art.t
-    -> (([ `raw ] Domain_name.t * Certificate.t) option -> unit)
+    -> (([ `host ] Domain_name.t * Certificate.t) option -> unit)
     -> Stack.t
     -> unit
 end

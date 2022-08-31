@@ -104,10 +104,15 @@ module Make
       (Printexc.to_string exn)) ;
     Lwt.return_error (`Certificate_unavailable_for hostname)
 
+  let delete_r3_hostname =
+    let r3 = Domain_name.(host_exn (of_string_exn "R3")) in
+    List.filter (fun (_, r3') ->
+      not (Domain_name.equal r3' r3))
+
   let thread_for http own_cert ?tries ?production
     ?email ?account_seed ?certificate_seed
     upgrade stackv4v6 =
-      match Value.hostnames_of_own_cert own_cert with
+      match Value.hostnames_of_own_cert own_cert |> delete_r3_hostname with
       | [] ->
         Log.err (fun m -> m "The given certificate does not have a hostname.") ;
         Fmt.invalid_arg "Certificate without hostname"
