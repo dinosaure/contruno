@@ -24,4 +24,11 @@
  (name contruno)
  (public_name contruno)
  (modules contruno)
- (libraries contruno.certif contruno.value irmin-mirage-git art ipaddr x509 irmin))
+ (libraries
+  contruno.certif
+  contruno.value
+  irmin-mirage-git
+  art
+  ipaddr
+  x509
+  irmin))
