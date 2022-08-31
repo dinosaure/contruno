@@ -31,16 +31,17 @@ let connect remote branch ~ctx =
 
 let aggregate_certificates active_branch =
   Store.list active_branch [] >>= fun lst ->
-  let f acc (name, k) = match Store.Tree.destruct k, Domain_name.of_string name with
+  let f acc (name, k) = match Store.Tree.destruct k, Result.bind (Domain_name.of_string name) Domain_name.host with
     | `Node _, _ -> Lwt.return acc
     | `Contents _, Error _ -> Lwt.return acc
     | `Contents _, Ok hostname ->
+      Log.debug (fun m -> m "Aggregate %a." Domain_name.pp hostname) ;
       Store.get active_branch [ name ] >>= fun certificate ->
       let hostnames' = Certificate.hostnames_of_own_cert certificate.own_cert in
-      match hostnames' with
-      | [ `Strict, hostname' ] when Domain_name.equal hostname hostname' ->
-        Lwt.return (certificate :: acc)
-      | _ -> Lwt.return acc in
+      Log.debug (fun m -> m "Hostname of certificate: %a." Fmt.(Dump.list X509.Host.pp) hostnames') ;
+      match List.exists ((=) (`Strict, hostname)) hostnames' with
+      | true  -> Lwt.return (certificate :: acc)
+      | false -> Lwt.return acc in
   Lwt_list.fold_left_s f [] lst
 
 let reload ~ctx ~branch ~remote tree push =
@@ -53,16 +54,15 @@ let reload ~ctx ~branch ~remote tree push =
   >>= fun _ ->
   Log.debug (fun m -> m "Repository pulled.");
   Store.list active_branch [] >>= fun lst ->
-  let f acc (name, k) = match Store.Tree.destruct k, Domain_name.of_string name with
+  let f acc (name, k) = match Store.Tree.destruct k, Result.bind (Domain_name.of_string name) Domain_name.host with
     | `Node _, _ -> Lwt.return acc
     | `Contents _, Error _ -> Lwt.return acc
     | `Contents _, Ok hostname ->
       Store.get active_branch [ name ] >>= fun certificate ->
       let hostnames' = Certificate.hostnames_of_own_cert certificate.own_cert in
-      match hostnames' with
-      | [ `Strict, hostname' ] when Domain_name.equal hostname hostname' ->
-        Lwt.return ((hostname, certificate) :: acc)
-      | _ -> Lwt.return acc in
+      match List.exists ((=) (`Strict, hostname)) hostnames' with
+      | true  -> Lwt.return ((hostname, certificate) :: acc)
+      | false -> Lwt.return acc in
   Lwt_list.fold_left_s f [] lst >>= fun certificates ->
   Log.debug (fun m -> m "Re-aggregate %d certificates." (List.length certificates));
   let f (hostname, certificate) =
@@ -384,13 +384,19 @@ module Make
     let conns = Hashtbl.fold (fun _ conn acc -> conn :: acc) conns [] in
     Lwt_list.iter_p reneg conns
 
+  let delete_r3_hostname =
+    let r3 = Domain_name.(host_exn (of_string_exn "R3")) in
+    List.filter (fun (_, r3') ->
+      not (Domain_name.equal r3' r3))
+
   let reasking_certificate http tree cfg invalid_certificate stackv4v6 =
     let { production; email; account_seed; certificate_seed; } = cfg in
     let hostname =
-      match Certificate.hostnames_of_own_cert invalid_certificate.Certificate.own_cert with
+      Certificate.hostnames_of_own_cert invalid_certificate.Certificate.own_cert
+      |> delete_r3_hostname
+      |> function
       | [ `Strict, hostname ] -> hostname
-      | _ -> assert false
-        (* XXX(dinosaure): see [aggregate_certificates]. *) in
+      | _ -> assert false in
     Certif.get_certificate_for http ~tries:10
       ~production ~hostname ?email ?account_seed ?certificate_seed stackv4v6 >>= function
     | Ok `None ->
@@ -447,9 +453,9 @@ module Make
       (List.length invalids) (List.length valids)) ;
     let tree = Art.make () in
     List.iter (fun ({ Certificate.own_cert; _ } as v) ->
-      let hostname = match Certificate.hostnames_of_own_cert own_cert with
+      let hostname = match Certificate.hostnames_of_own_cert own_cert |> delete_r3_hostname with
         | [ `Strict, hostname ] -> hostname
-        | _ -> assert false (* XXX(dinosaure): see [aggregate_certificates]. *) in
+        | _ -> assert false in
       Art.insert tree (Art.key (Domain_name.to_string hostname)) v) valids ;
     Lwt_list.iter_s
       (fun v -> reasking_and_upgrade active_branch remote http tree cfg v stackv4v6) invalids >>= fun () ->
@@ -528,7 +534,7 @@ module Make
     Log.debug (fun m -> m "TLS certificates sanitized.") ;
     let conns = Hashtbl.create 0x1000 in
     let f (hostname : Art.key) v acc =
-      let hostname' = Domain_name.of_string_exn (hostname :> string) in
+      let hostname' = Domain_name.(host_exn (of_string_exn (hostname :> string))) in
       (hostname', create_upgrader http conns tree ~ctx ~branch ~remote cfg stackv4v6 hostname v) :: acc in
     let ths = Art.iter ~f [] tree in
     let upgrader hostname v =
