@@ -201,15 +201,15 @@ module Make0
         Paf.run (module Httpaf_client_connection) ~sleep:Time.sleep_ns conn (R.T flow)
 
   let transmit
-    : [ `read ] H2.Body.t -> [ `write ] H2.Body.t -> unit
+    : H2.Body.Reader.t -> H2.Body.Writer.t -> unit
     = fun src dst ->
       let rec on_eof () =
-        H2.Body.close_writer dst ;
-        H2.Body.close_reader src (* XXX(dinosaure): double-close? *)
+        H2.Body.Writer.close dst ;
+        H2.Body.Reader.close src (* XXX(dinosaure): double-close? *)
       and on_read buf ~off ~len =
-        H2.Body.write_bigstring dst ~off ~len buf ;
-        H2.Body.schedule_read src ~on_eof ~on_read in
-      H2.Body.schedule_read src ~on_eof ~on_read
+        H2.Body.Writer.write_bigstring dst ~off ~len buf ;
+        H2.Body.Reader.schedule_read src ~on_eof ~on_read in
+      H2.Body.Reader.schedule_read src ~on_eof ~on_read
 
   let http_2_0_response_handler reqd : H2.Client_connection.response_handler = fun resp src ->
     let dst = H2.Reqd.respond_with_streaming reqd resp in
