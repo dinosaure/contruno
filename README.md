@@ -167,6 +167,13 @@ $ solo5-hvt --net:service=tap100 contruno.hvt -- \
   --ssh-ssh U01hpCOJ/MHLri7YBi7NBXqZ8TXDkVyXSb7CdGQr \
 ```
 
+**NOTE**: We currently launched `contruno` with `--production false` which
+means that `contruno` will ask only fake certificates to let's encrypt. If you
+really want to deploy `contruno` and use it, you should set the option to
+`true`. We use the `false` option to let you to test `contruno` without
+limitations from let's encrypt (you can ask an re-ask certificates without
+being banned).
+
 Finally, we can ask a new certificate via our `contruno.add` tool:
 ```sh
 $ contruno.add --hostname <your-hostname> --ip <private-ip-of-your-website> \
@@ -174,7 +181,7 @@ $ contruno.add --hostname <your-hostname> --ip <private-ip-of-your-website> \
   --target 10.0.0.2
 ```
 
-The last command will create a fake and expirted certificate which enforces
+The last command will create a fake and expired certificate which enforces
 `contruno` to re-asking a new one and update the `certificates.git` Git
 repository with the new one. Then, `contruno` will use it for any HTTP
 requests to `<your-hostname>`.
