@@ -6,6 +6,7 @@
   rresult
   ca-certs-nss
   dns-client.mirage
+  contruno.value
   paf.mirage
   paf-le
   tcpip
@@ -17,10 +18,17 @@
  (name value)
  (public_name contruno.value)
  (modules value)
- (libraries rresult irmin ipaddr x509))
+ (libraries tls rresult irmin ipaddr x509))
 
 (library
  (name contruno)
  (public_name contruno)
  (modules contruno)
- (libraries certif value irmin-mirage-git art ipaddr x509 irmin))
+ (libraries
+  contruno.certif
+  contruno.value
+  irmin-mirage-git
+  art
+  ipaddr
+  x509
+  irmin))

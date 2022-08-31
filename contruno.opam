@@ -25,12 +25,7 @@ depends: [
   "mirage-random"
   "mirage-stack"
   "mirage-time"
-  "paf"              {>= "0.0.9"}
-  "paf-le"           {>= "0.0.9"}
+  "paf"              {>= "0.1.0"}
+  "paf-le"           {>= "0.1.0"}
   "x509"
-]
-
-pin-depends: [
-  [ "paf.dev" "git+https://github.com/dinosaure/paf-le-chien.git#c44dbb29e23449e247ffeb06d865c9a2965fcbd0" ]
-  [ "paf-le.dev" "git+https://github.com/dinosaure/paf-le-chien.git#c44dbb29e23449e247ffeb06d865c9a2965fcbd0" ]
 ]
