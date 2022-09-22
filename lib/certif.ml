@@ -13,7 +13,7 @@ module Make
   module DNS = Dns_client_mirage.Make (Random) (Time) (Mclock) (Pclock) (Stack)
   module Let = LE.Make (Time) (Stack)
   module Nss = Ca_certs_nss.Make (Pclock)
-  module Paf = Paf_mirage.Make (Time) (Stack.TCP)
+  module Paf = Paf_mirage.Make (Stack.TCP)
   module Log = (val (Logs.src_log (Logs.Src.create "contruno.certif")))
 
   let authenticator = R.failwith_error_msg (Nss.authenticator ())

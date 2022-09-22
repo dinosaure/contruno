@@ -86,7 +86,6 @@ module Make
   val serve
     :  (Ipaddr.t * int, flow) Hashtbl.t
     -> Certificate.t Art.t
-    -> error_handler:(string -> ?request:Alpn.request -> Alpn.server_error -> (Alpn.headers -> Alpn.body) -> unit)
     -> Stack.TCP.t
     -> stack Paf.service
 
