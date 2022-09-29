@@ -29,3 +29,11 @@ depends: [
   "paf-le"           {>= "0.1.0"}
   "x509"
 ]
+pin-depends: [
+  [ "paf.dev" "git+https://github.com/dinosaure/paf-le-chien.git#53ddbdc374ac0ff50b935a384803539e31f12c48" ]
+  [ "paf-le.dev" "git+https://github.com/dinosaure/paf-le-chien.git#53ddbdc374ac0ff50b935a384803539e31f12c48" ]
+  [ "git.dev" "git+https://github.com/mirage/ocaml-git.git#8afe1caa64041cf31ba5094cc6eff13abbcea226" ]
+  [ "git-paf.dev" "git+https://github.com/mirage/ocaml-git.git#8afe1caa64041cf31ba5094cc6eff13abbcea226" ]
+  [ "git-unix.dev" "git+https://github.com/mirage/ocaml-git.git#8afe1caa64041cf31ba5094cc6eff13abbcea226" ]
+  [ "git-mirage.dev" "git+https://github.com/mirage/ocaml-git#8afe1caa64041cf31ba5094cc6eff13abbcea226" ]
+]

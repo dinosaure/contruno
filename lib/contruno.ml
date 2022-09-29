@@ -79,7 +79,6 @@ type cfg =
   ; certificate_seed : string option }
 
 module Make0
-  (Time : Mirage_time.S)
   (Stack : Tcpip.Stack.V4V6)
 = struct
   module TCP = struct
@@ -198,7 +197,7 @@ module Make0
         transmit (Httpaf.Reqd.request_body reqd) dst ;
         (* XXX(dinosaure): we probably [pick] with a [timeout] to be sure
          * that the resource is restricted and released. *)
-        Paf.run (module Httpaf_client_connection) ~sleep:Time.sleep_ns conn (R.T flow)
+        Paf.run (module Httpaf_client_connection) conn (R.T flow)
 
   let transmit
     : H2.Body.Reader.t -> H2.Body.Writer.t -> unit
@@ -301,7 +300,7 @@ module Make0
           ~error_handler:http_2_0_error_handler
           ~response_handler:(http_2_0_response_handler reqd) in
         transmit (H2.Reqd.request_body reqd) dst ;
-        Paf.run (module H2.Client_connection) ~sleep:Time.sleep_ns conn (R.T flow)
+        Paf.run (module H2.Client_connection) conn (R.T flow)
 end
 
 module Make
@@ -312,10 +311,10 @@ module Make
   (Stack : Tcpip.Stack.V4V6)
 = struct
   module Log = (val (Logs.src_log (Logs.Src.create "contruno.unikernel")))
-  module Paf = Paf_mirage.Make (Time) (Stack.TCP)
+  module Paf = Paf_mirage.Make (Stack.TCP)
 
   module TLS = struct
-    include Tls_mirage.Make (Stack.TCP)
+    include Tls_mirage.Make (Paf.TCP)
 
     type nonrec flow =
       { edn : Ipaddr.t * int
@@ -559,15 +558,16 @@ module Make
       | [] -> None
       | (_, hostname) :: _ -> Some hostname
 
-  include Make0 (Time) (Stack)
+  include Make0 (Stack)
   open Rresult
   open Lwt.Infix
 
   let request_handler
-    : Stack.TCP.t -> Certificate.t Art.t -> string -> Alpn.reqd -> unit
-    = fun stackv4v6 tree peer reqd -> match reqd with
-    | Alpn.(Reqd_HTTP_1_1 reqd) -> http_1_1_request_handler stackv4v6 tree peer reqd
-    | Alpn.(Reqd_HTTP_2_0 reqd) -> http_2_0_request_handler stackv4v6 tree reqd
+    : type reqd headers request response ro wo.
+      Stack.TCP.t -> Certificate.t Art.t -> _ -> string -> reqd -> (reqd, headers, request, response, ro, wo) Alpn.protocol -> unit
+    = fun stackv4v6 tree _flow peer reqd -> function
+    | Alpn.HTTP_1_1 _ -> http_1_1_request_handler stackv4v6 tree peer reqd
+    | Alpn.H2 _ -> http_2_0_request_handler stackv4v6 tree reqd
 
   type stack = Paf.t
 
@@ -585,9 +585,13 @@ module Make
     | false, true  -> [ "h2" ]
     | false, false -> []
 
-  let serve conns tree ~error_handler stackv4v6 =
+  let handler stackv4v6 tree =
+    { Alpn.request= (fun flow edn reqd protocol -> request_handler stackv4v6 tree flow edn reqd protocol)
+    ; Alpn.error= (fun _edn _protocol ?request:_ _error _respond -> ()) (* TODO *) }
+
+  let serve conns tree stackv4v6 =
     let handshake tcp =
-      let ipaddr, port = Stack.TCP.dst tcp in
+      let ipaddr, port = Paf.TCP.dst tcp in
       Log.debug (fun m -> m "Got a TCP/IP connection from %a:%d." Ipaddr.pp ipaddr port) ;
       let f _ { Certificate.own_cert; _ } acc = match own_cert with
         | `Single certchain -> certchain :: acc
@@ -621,9 +625,7 @@ module Make
           let err = R.msgf "%a" TLS.pp_write_error err in
           Paf.TCP.close tcp >>= fun () -> Lwt.return_error err in
     let close _ = Lwt.return_unit in
-    Alpn.service info handshake Paf.accept close
-      ~error_handler
-      ~request_handler:(request_handler stackv4v6 tree)
+    Alpn.service info (handler stackv4v6 tree) handshake Paf.accept close
 
   let rec check ~pass flow =
     go flow 0 (Bytes.create (String.length pass)) >>= function
