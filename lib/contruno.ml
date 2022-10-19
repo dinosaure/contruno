@@ -4,29 +4,6 @@ open Lwt.Infix
 module Certificate = Value
 module Log = (val (Logs.src_log (Logs.Src.create "contruno")))
 
-(*
-let failwith_error_sync = function
-  | Error err ->
-    Log.err (fun m -> m "Got a push-error: %a." Sync.pp_push_error err) ;
-    Fmt.failwith "%a." Sync.pp_push_error err
-  | Ok v -> v
-
-let failwith_error_store = function
-  | Error (`Conflict err) -> Fmt.failwith "Conflict: %s" err
-  | Error (`Test_was _) -> Fmt.failwith "Impossible to update the current store"
-  | Error (`Too_many_retries n) -> Fmt.failwith "Too many retries (%d)" n
-  | Ok v -> v
-
-let failwith_error_pull = function
-  | Error err ->
-    Log.err (fun m -> m "Got a pull-error: %a." Sync.pp_pull_error err) ;
-    Fmt.failwith "%a." Sync.pp_pull_error err
-  | Ok v -> v
-*)
-
-let connect ~ctx remote =
-  Git_kv.connect ctx remote
-
 let aggregate_certificates store =
   Git_kv.list store Mirage_kv.Key.empty >>= function
   | Error _ -> Lwt.return []
@@ -47,9 +24,6 @@ let aggregate_certificates store =
 
 let reload ~ctx ~remote tree push =
   Git_kv.connect ctx remote >>= fun store ->
-  Log.debug (fun m -> m "Start to pull Git repository.");
-  Git_kv.pull store >|= R.failwith_error_msg >>= fun _changes ->
-  Log.debug (fun m -> m "Repository pulled.");
   Git_kv.list store Mirage_kv.Key.empty >>= function
   | Error _ -> Lwt.return_unit
   | Ok lst ->
@@ -464,7 +438,6 @@ module Make
 
   let set ~ctx remote tree hostname v =
     Git_kv.connect ctx remote >>= fun store ->
-    Git_kv.pull store >|= R.failwith_error_msg >>= fun _ ->
     Git_kv.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname) (Certificate.to_string_json v)
     >|= R.reword_error (R.msgf "%a" Git_kv.pp_write_error) >|= R.failwith_error_msg
     >>= fun () -> Git_kv.push store >|= R.failwith_error_msg

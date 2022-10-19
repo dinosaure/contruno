@@ -20,8 +20,6 @@ type cfg =
   ; account_seed : string option
   ; certificate_seed : string option }
 
-val connect : ctx:Mimic.ctx -> string -> Git_kv.t Lwt.t
-
 module Make
   (Random : Mirage_random.S)
   (Time : Mirage_time.S)
