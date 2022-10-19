@@ -31,5 +31,4 @@
   data-encoding
   art
   ipaddr
-  x509
-  irmin))
+  x509))
