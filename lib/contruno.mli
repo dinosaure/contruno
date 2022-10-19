@@ -9,14 +9,10 @@ module Certificate : sig
   type t =
     { own_cert : own_cert
     ; ip       : Ipaddr.t
+    ; port     : int
     ; alpn     : alpn list }
   and alpn = HTTP_1_1 | H2
-
-  include Irmin.Contents.S with type t := t
 end
-
-module Store : module type of Irmin_mirage_git.Mem.KV.Make (Certificate)
-module Sync  : module type of Irmin.Sync.Make (Store)
 
 type cfg =
   { production : bool
@@ -24,7 +20,7 @@ type cfg =
   ; account_seed : string option
   ; certificate_seed : string option }
 
-val connect : string -> string -> ctx:Mimic.ctx -> (Store.t * Irmin.remote) Lwt.t
+val connect : ctx:Mimic.ctx -> string -> Git_kv.t Lwt.t
 
 module Make
   (Random : Mirage_random.S)
@@ -43,8 +39,7 @@ module Make
 
   val sanitize
     :  Lwt_mutex.t
-    -> Store.t
-    -> Irmin.remote
+    -> Git_kv.t
     -> cfg
     -> Stack.t
     -> Certificate.t Art.t Lwt.t
@@ -57,7 +52,6 @@ module Make
   val initialize
     :  Lwt_mutex.t
     -> ctx:Mimic.ctx
-    -> branch:string
     -> remote:string
     -> cfg
     -> Stack.t
@@ -71,7 +65,6 @@ module Make
     -> (Ipaddr.t * int, flow) Hashtbl.t
     -> Certificate.t Art.t
     -> ctx:Mimic.ctx
-    -> branch:string
     -> remote:string
     -> cfg
     -> Stack.t
@@ -92,7 +85,6 @@ module Make
   val add_hook
     :  pass:string
     -> ctx:Mimic.ctx
-    -> branch:string
     -> remote:string
     -> Certificate.t Art.t
     -> (([ `host ] Domain_name.t * Certificate.t) option -> unit)

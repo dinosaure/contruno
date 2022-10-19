@@ -2,4 +2,4 @@
  (name add)
  (package contruno-bin)
  (public_name contruno.add)
- (libraries value irmin-unix))
+ (libraries value fmt.cli logs.cli fmt.tty git-unix git-kv))

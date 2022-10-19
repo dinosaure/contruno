@@ -2,8 +2,6 @@ open Rresult
 open Lwt.Infix
 
 module Certificate = Value
-module Store = Irmin_unix.Git.Mem.KV (Certificate)
-module Sync = Irmin.Sync.Make (Store)
 
 let rec upgrade ~pass inet_addr =
   let target = Unix.ADDR_INET (inet_addr, 9418) in
@@ -163,31 +161,21 @@ let get_certificate_and_pkey ?seed:_ ~hostname cert pkey = match cert, pkey with
     | Error (#X509.Validation.signature_error as err) ->
       Lwt.return_error (R.msgf "%a" X509.Validation.pp_signature_error err)
 
-let add hostname cert pkey ip alpn remote ~pass target =
-  (* XXX(dinosaure): hmmmhmmm, we should not do that. *)
-  let remote, branch = match String.split_on_char '#' remote with
-    | [ remote; branch ] -> remote, branch
-    | _ -> remote, "main" in
+let add hostname cert pkey (ip, port) alpn remote ~pass target =
   let tmp = R.failwith_error_msg (Bos.OS.Dir.tmp "git-%s") in
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git")) in
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "refs")) in
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "tmp")) in
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "objects")) in
   let _   = R.failwith_error_msg (Bos.OS.Dir.create Fpath.(tmp / ".git" / "objects" / "pack")) in
-  let config = Irmin_git.config (Fpath.to_string tmp) in
-  Store.Repo.v config >>= fun repo -> Store.of_branch repo branch >>= fun active_branch ->
   unix_ctx_with_ssh () >>= fun ctx ->
-  Store.remote ~ctx remote >>= fun remote ->
-  Sync.pull active_branch remote `Set >|= R.reword_error (fun err -> `Pull err) >>? fun _ ->
+  Git_kv.connect ctx remote >>= fun store ->
+  Git_kv.pull store >>? fun _ ->
   get_certificate_and_pkey ~hostname cert pkey >>? fun own_cert ->
-  let v = { Certificate.own_cert; ip; alpn; } in
-  let info () =
-    let date = Int64.of_float (Unix.gettimeofday ())
-    and mesg = Fmt.str "New certificate for %a added" Domain_name.pp hostname in
-    Store.Info.v ~message:mesg ~author:"contruno.add" date in
-  Store.set ~info active_branch [ Domain_name.to_string hostname ] v
-  >|= R.reword_error (fun err -> `Set err) >>? fun _ ->
-  Sync.push active_branch remote >|= R.reword_error (fun err -> `Push err) >>? fun _ ->
+  let v = { Certificate.own_cert; ip; port; alpn; } in
+  Git_kv.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
+    (Certificate.to_string_json v) >|= R.reword_error (fun err -> `Write err) >>? fun () ->
+  Git_kv.push store >>? fun () ->
   match pass, target with
   | Some pass, Some target -> upgrade ~pass target
   | Some _, None | None, Some _ ->
@@ -198,15 +186,13 @@ let pp_sockaddr ppf = function
   | Unix.ADDR_UNIX socket -> Fmt.pf ppf "%s" socket
   | Unix.ADDR_INET (inet_addr, port) -> Fmt.pf ppf "%s:%d" (Unix.string_of_inet_addr inet_addr) port
 
-let run _ hostname cert pkey ip alpn remote pass target =
+let run _ hostname cert pkey website alpn remote pass target =
   let cert = Option.map snd cert in
   let pkey = Option.map snd pkey in
-  match Lwt_main.run (add hostname cert pkey ip alpn remote ~pass target) with
+  match Lwt_main.run (add hostname cert pkey website alpn remote ~pass target) with
   | Ok () -> `Ok ()
   | Error (`Msg err) -> `Error (false, Fmt.str "%s." err)
-  | Error (`Pull _err) -> `Error (false, Fmt.str "Unreachable Git repository.")
-  | Error (`Set _err) -> `Error (false, Fmt.str "Unable to locally set the store.")
-  | Error (`Push _err) -> `Error (false, Fmt.str "Unallowed to push to %s." remote)
+  | Error (`Write _err) -> `Error (false, Fmt.str "Unable to locally set the store.")
   | Error (`Unix_error _) ->
     let target = Option.get target in
     (* XXX(dinosaure): this error can occur only if [target] is given. *)
@@ -255,7 +241,11 @@ let private_key_as_a_file =
   let pp ppf (fpath, _) = Fpath.pp ppf fpath in
   Arg.conv (parser, pp)
 
-let ipaddr = Arg.conv (Ipaddr.of_string, Ipaddr.pp)
+let ipaddr =
+  let pp ppf (ipaddr, port) = match port with
+    | 80 -> Ipaddr.pp ppf ipaddr
+    | port -> Fmt.pf ppf "%a:%d" Ipaddr.pp ipaddr port in
+  Arg.conv (Ipaddr.with_port_of_string ~default:80, pp)
 
 let alpn =
   let parser str = match String.lowercase_ascii str with
@@ -287,7 +277,7 @@ let private_key =
   Arg.(value & opt (some private_key_as_a_file) None & info [ "p"; "private-key" ] ~doc)
 
 let ip =
-  let doc = "The IP of the website." in
+  let doc = "The IP (with optional port) of the website." in
   Arg.(required & opt (some ipaddr) None & info [ "i"; "ip" ] ~doc)
 
 let alpn =

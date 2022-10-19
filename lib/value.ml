@@ -30,48 +30,68 @@ let hostnames_of_own_cert : own_cert -> _ = function
 type t =
   { own_cert : own_cert
   ; ip       : Ipaddr.t
+  ; port     : int
   ; alpn     : alpn list }
 and alpn = HTTP_1_1 | H2
 
-let cstruct = Irmin.Type.(map string Cstruct.of_string Cstruct.to_string)
+let cstruct =
+  let open Data_encoding in
+  conv Cstruct.to_string Cstruct.of_string string
 
 let certificate =
-  Irmin.Type.(map cstruct (R.get_ok <.> X509.Certificate.decode_pem) X509.Certificate.encode_pem)
+  let open Data_encoding in
+  conv X509.Certificate.encode_pem (R.get_ok <.> X509.Certificate.decode_pem) cstruct
 let private_key =
-  Irmin.Type.(map cstruct (R.get_ok <.> X509.Private_key.decode_pem) X509.Private_key.encode_pem)
+  let open Data_encoding in
+  conv X509.Private_key.encode_pem (R.get_ok <.> X509.Private_key.decode_pem) cstruct
 let certchain =
-  Irmin.Type.(pair (list certificate) private_key)
+  let open Data_encoding in
+  tup2 (list certificate) private_key
 let own_cert =
-  let open Irmin.Type in
-  let dtor multiple multiple_default single = function
-    | `Multiple v -> multiple v
-    | `Multiple_default v -> multiple_default v
-    | `Single v -> single v in
-  variant "own_cert" dtor
-  |~ case1 "multiple" (list certchain) (fun v -> `Multiple v)
-  |~ case1 "multiple_default" (pair certchain (list certchain)) (fun v -> `Multiple_default v)
-  |~ case1 "single" certchain (fun v -> `Single v)
-  |> sealv
+  let open Data_encoding in
+  union
+  [ case ~title:"multiple" (Tag 0) (list certchain)
+      (function `Multiple v -> Some v | _ -> None)
+      (fun v -> `Multiple v)
+  ; case ~title:"multiple_default" (Tag 1) (tup2 certchain (list certchain))
+      (function `Multiple_default v -> Some v | _ -> None)
+      (fun v -> `Multiple_default v)
+  ; case ~title:"single" (Tag 2) certchain
+      (function `Single v -> Some v | _ -> None)
+      (fun v -> `Single v) ]
 
-let ipaddr = Irmin.Type.(map string Ipaddr.of_string_exn Ipaddr.to_string)
+let ipaddr =
+  let open Data_encoding in
+  conv Ipaddr.to_string Ipaddr.of_string_exn string
 
 let alpn =
-  let open Irmin.Type in
-  let dtor http_1_1 h2 = function
-    | HTTP_1_1 -> http_1_1
-    | H2 -> h2 in
-  variant "alpn"  dtor
-  |~ case0 "http/1.1" HTTP_1_1
-  |~ case0 "h2" H2
-  |> sealv
+  let open Data_encoding in
+  union
+  [ case ~title:"http/1.1" (Tag 0) unit
+    (function HTTP_1_1 -> Some () | _ -> None)
+    (fun () -> HTTP_1_1)
+  ; case ~title:"h2" (Tag 1) unit
+    (function H2 -> Some () | _ -> None)
+    (fun () -> H2) ]
 
 let t =
-  let open Irmin.Type in
-  record "certificate"
-    (fun own_cert ip alpn -> { own_cert; ip; alpn; })
-  |+ field "own_cert"    own_cert    (fun t -> t.own_cert)
-  |+ field "ip"          ipaddr      (fun t -> t.ip)
-  |+ field "alpn"        (list alpn) (fun t -> t.alpn)
-  |> sealr
+  let open Data_encoding in
+  obj4
+    (req "own_cert" own_cert)
+    (req "ip" ipaddr)
+    (dft "port" int16 80)
+    (dft "alpn" (list alpn) [ HTTP_1_1; H2 ])
+  |> conv
+     (fun { own_cert; ip; port; alpn; } -> (own_cert, ip, port, alpn))
+     (fun (own_cert, ip, port, alpn) -> { own_cert; ip; port; alpn; })
 
-let merge = Irmin.Merge.(option (idempotent t))
+let to_string_json v =
+  let open Data_encoding in
+  Json.construct t v |> Json.to_string
+
+let of_string_json str =
+  let open Data_encoding in
+  try match Json.from_string str with
+      | Ok v -> Ok (Json.destruct t v)
+      | Error _ -> Error (`Msg "Invalid JSON value")
+  with _exn -> Error (`Msg "Invalid contruno value")
