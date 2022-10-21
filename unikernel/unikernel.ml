@@ -14,8 +14,6 @@ module Make
   include Contruno.Make (Random) (Time) (Mclock) (Pclock) (Stack)
   module Log = (val (Logs.src_log (Logs.Src.create "contruno.main")))
 
-  let error_handler _peer ?request:_ _error _write = ()
-
   (* XXX(dinosaure): [add_hook] fills a stream with what it's upgraded from the Git
    * repository. If the user adds a new certificate, it will appear into the stream.
    * So we must consume it and check if a new domain appeared according to our [hashset].
@@ -70,13 +68,11 @@ module Make
                ; email= Option.bind (Key_gen.email ()) (R.to_option <.> Emile.of_string)
                ; account_seed= Key_gen.account_seed ()
                ; certificate_seed= Key_gen.certificate_seed () } in
-    let remote, branch = match String.split_on_char '#' (Key_gen.remote ()) with
-      | [ remote; branch; ] -> remote, branch
-      | _ -> Key_gen.remote (), "master" in
+    let remote = Key_gen.remote () in
     let stream, push = Lwt_stream.create () in
-    initialize http ~ctx ~branch ~remote cfg stackv4v6
+    initialize http ~ctx ~remote cfg stackv4v6
     >>= fun (conns, tree, reneg_ths, `Upgrader upgrader) ->
-    let service = serve conns tree ~error_handler (Stack.tcp stackv4v6) in
+    let service = serve conns tree (Stack.tcp stackv4v6) in
     add_hook ~pass:(Key_gen.pass ()) ~ctx ~branch ~remote tree push stackv4v6 ;
     init ~port:443 stackv4v6 >>= fun stack ->
     let stop = Lwt_switch.create () in
