@@ -73,10 +73,10 @@ module Make
     initialize http ~ctx ~remote cfg stackv4v6
     >>= fun (conns, tree, reneg_ths, `Upgrader upgrader) ->
     let service = serve conns tree (Stack.tcp stackv4v6) in
-    add_hook ~pass:(Key_gen.pass ()) ~ctx ~branch ~remote tree push stackv4v6 ;
+    add_hook ~pass:(Key_gen.pass ()) ~ctx ~remote tree push stackv4v6 ;
     init ~port:443 stackv4v6 >>= fun stack ->
     let stop = Lwt_switch.create () in
-    let `Initialized th = Paf.serve ~sleep:Time.sleep_ns ~stop service stack in
+    let `Initialized th = Paf.serve ~stop service stack in
     Lwt.both
       (launch_reneg_ths ~stop ~upgrader reneg_ths stream)
       (Lwt.both th (Stack.listen stackv4v6)) >>= fun ((), ((), ())) ->
