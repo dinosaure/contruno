@@ -2,6 +2,7 @@ open Rresult
 open Lwt.Infix
 
 module Certificate = Value
+module Store = Git_kv.Make(Pclock)
 
 let rec upgrade ~pass inet_addr =
   let target = Unix.ADDR_INET (inet_addr, 9418) in
@@ -173,7 +174,7 @@ let add hostname cert pkey (ip, port) alpn remote ~pass target =
   Git_kv.pull store >>? fun _ ->
   get_certificate_and_pkey ~hostname cert pkey >>? fun own_cert ->
   let v = { Certificate.own_cert; ip; port; alpn; } in
-  Git_kv.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
+  Store.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
     (Certificate.to_string_json v) >|= R.reword_error (fun err -> `Write err) >>? fun () ->
   Git_kv.push store >>? fun () ->
   match pass, target with

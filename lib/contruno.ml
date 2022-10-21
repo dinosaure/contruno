@@ -4,48 +4,6 @@ open Lwt.Infix
 module Certificate = Value
 module Log = (val (Logs.src_log (Logs.Src.create "contruno")))
 
-let aggregate_certificates store =
-  Git_kv.list store Mirage_kv.Key.empty >>= function
-  | Error _ -> Lwt.return []
-  | Ok lst ->
-    let f acc (name, kind) = match kind, Result.bind (Domain_name.of_string name) Domain_name.host with
-      | `Dictionary, _ -> Lwt.return acc
-      | `Value, Error _ -> Lwt.return acc
-      | `Value, Ok hostname ->
-        Log.debug (fun m -> m "Aggregate %a." Domain_name.pp hostname) ;
-        Git_kv.get store Mirage_kv.Key.(empty / name)
-        >|= R.get_ok >|= Value.of_string_json >|= R.failwith_error_msg >>= fun certificate ->
-        let hostnames' = Certificate.hostnames_of_own_cert certificate.own_cert in
-        Log.debug (fun m -> m "Hostname of certificate: %a." Fmt.(Dump.list X509.Host.pp) hostnames') ;
-        match List.exists ((=) (`Strict, hostname)) hostnames' with
-        | true  -> Lwt.return (certificate :: acc)
-        | false -> Lwt.return acc in
-    Lwt_list.fold_left_s f [] lst
-
-let reload ~ctx ~remote tree push =
-  Git_kv.connect ctx remote >>= fun store ->
-  Git_kv.list store Mirage_kv.Key.empty >>= function
-  | Error _ -> Lwt.return_unit
-  | Ok lst ->
-    let f acc (name, kind) = match kind, Result.bind (Domain_name.of_string name) Domain_name.host with
-      | `Dictionary, _ -> Lwt.return acc
-      | `Value, Error _ -> Lwt.return acc
-      | `Value, Ok hostname ->
-        Git_kv.get store Mirage_kv.Key.(empty / name)
-        >|= R.get_ok >|= Value.of_string_json >|= R.failwith_error_msg >>= fun certificate ->
-        let hostnames' = Certificate.hostnames_of_own_cert certificate.own_cert in
-        match List.exists ((=) (`Strict, hostname)) hostnames' with
-        | true  -> Lwt.return ((hostname, certificate) :: acc)
-        | false -> Lwt.return acc in
-    Lwt_list.fold_left_s f [] lst >>= fun certificates ->
-    Log.debug (fun m -> m "Re-aggregate %d certificates." (List.length certificates));
-    let f (hostname, certificate) =
-      ( try Art.remove tree (Art.key (Domain_name.to_string hostname)) with _ -> () ) ;
-      Art.insert tree (Art.key (Domain_name.to_string hostname)) certificate ;
-      Log.debug (fun m -> m "Re-update certificate for %a." Domain_name.pp hostname);
-      push (Some (hostname, certificate)) in
-    List.iter f certificates ; Lwt.return_unit
-
 type cfg =
   { production : bool
   ; email : Emile.mailbox option
@@ -286,6 +244,49 @@ module Make
 = struct
   module Log = (val (Logs.src_log (Logs.Src.create "contruno.unikernel")))
   module Paf = Paf_mirage.Make (Stack.TCP)
+  module Store = Git_kv.Make (Pclock)
+
+  let aggregate_certificates store =
+    Store.list store Mirage_kv.Key.empty >>= function
+    | Error _ -> Lwt.return []
+    | Ok lst ->
+      let f acc (name, kind) = match kind, Result.bind (Domain_name.of_string name) Domain_name.host with
+        | `Dictionary, _ -> Lwt.return acc
+        | `Value, Error _ -> Lwt.return acc
+        | `Value, Ok hostname ->
+          Log.debug (fun m -> m "Aggregate %a." Domain_name.pp hostname) ;
+          Store.get store Mirage_kv.Key.(empty / name)
+          >|= R.get_ok >|= Value.of_string_json >|= R.failwith_error_msg >>= fun certificate ->
+          let hostnames' = Certificate.hostnames_of_own_cert certificate.own_cert in
+          Log.debug (fun m -> m "Hostname of certificate: %a." Fmt.(Dump.list X509.Host.pp) hostnames') ;
+          match List.exists ((=) (`Strict, hostname)) hostnames' with
+          | true  -> Lwt.return (certificate :: acc)
+          | false -> Lwt.return acc in
+      Lwt_list.fold_left_s f [] lst
+  
+  let reload ~ctx ~remote tree push =
+    Git_kv.connect ctx remote >>= fun store ->
+    Store.list store Mirage_kv.Key.empty >>= function
+    | Error _ -> Lwt.return_unit
+    | Ok lst ->
+      let f acc (name, kind) = match kind, Result.bind (Domain_name.of_string name) Domain_name.host with
+        | `Dictionary, _ -> Lwt.return acc
+        | `Value, Error _ -> Lwt.return acc
+        | `Value, Ok hostname ->
+          Store.get store Mirage_kv.Key.(empty / name)
+          >|= R.get_ok >|= Value.of_string_json >|= R.failwith_error_msg >>= fun certificate ->
+          let hostnames' = Certificate.hostnames_of_own_cert certificate.own_cert in
+          match List.exists ((=) (`Strict, hostname)) hostnames' with
+          | true  -> Lwt.return ((hostname, certificate) :: acc)
+          | false -> Lwt.return acc in
+      Lwt_list.fold_left_s f [] lst >>= fun certificates ->
+      Log.debug (fun m -> m "Re-aggregate %d certificates." (List.length certificates));
+      let f (hostname, certificate) =
+        ( try Art.remove tree (Art.key (Domain_name.to_string hostname)) with _ -> () ) ;
+        Art.insert tree (Art.key (Domain_name.to_string hostname)) certificate ;
+        Log.debug (fun m -> m "Re-update certificate for %a." Domain_name.pp hostname);
+        push (Some (hostname, certificate)) in
+      List.iter f certificates ; Lwt.return_unit
 
   module TLS = struct
     include Paf.TLS
@@ -405,15 +406,15 @@ module Make
     Log.debug (fun m -> m "Compute action: %a" pp_action action) ;
     match action with
     | `Set (hostname, v) ->
-      Git_kv.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
+      Store.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
         (Certificate.to_string_json v)
-      >|= R.reword_error (R.msgf "%a" Git_kv.pp_write_error)
+      >|= R.reword_error (R.msgf "%a" Store.pp_write_error)
       >|= R.failwith_error_msg
       >>= fun () -> Git_kv.push store
       >|= R.failwith_error_msg
     | `Delete hostname ->
-      Git_kv.remove store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
-      >|= R.reword_error (R.msgf "%a" Git_kv.pp_write_error)
+      Store.remove store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
+      >|= R.reword_error (R.msgf "%a" Store.pp_write_error)
       >|= R.failwith_error_msg
       >>= fun () -> Git_kv.push store
       >|= R.failwith_error_msg
@@ -438,8 +439,8 @@ module Make
 
   let set ~ctx remote tree hostname v =
     Git_kv.connect ctx remote >>= fun store ->
-    Git_kv.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname) (Certificate.to_string_json v)
-    >|= R.reword_error (R.msgf "%a" Git_kv.pp_write_error) >|= R.failwith_error_msg
+    Store.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname) (Certificate.to_string_json v)
+    >|= R.reword_error (R.msgf "%a" Store.pp_write_error) >|= R.failwith_error_msg
     >>= fun () -> Git_kv.push store >|= R.failwith_error_msg
     (* XXX(dinosaure): in this case, we should invalidate the given certificate [v]. *)
     >>= fun _  ->
