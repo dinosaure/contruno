@@ -25,19 +25,10 @@ depends: [
   "mirage-stack"
   "mirage-time"
   "data-encoding"
-  "paf"              {>= "0.2.0"}
-  "paf-le"           {>= "0.2.0"}
+  "paf"              {>= "0.3.0"}
+  "paf-le"           {>= "0.3.0"}
   "x509"
 ]
 pin-depends: [
-  [ "paf.dev" "git+https://github.com/dinosaure/paf-le-chien.git#100a9748369f2d8f24f8533b62e546d6cfa6ee9e" ]
-  [ "paf-le.dev" "git+https://github.com/dinosaure/paf-le-chien.git#100a9748369f2d8f24f8533b62e546d6cfa6ee9e" ]
-  [ "carton.dev" "git+https://github.com/mirage/ocaml-git.git#4f00636cb5f5ed7793dca8739354235da3d5428f" ]
-  [ "carton-git.dev" "git+https://github.com/mirage/ocaml-git.git#4f00636cb5f5ed7793dca8739354235da3d5428f" ]
-  [ "carton-lwt.dev" "git+https://github.com/mirage/ocaml-git.git#4f00636cb5f5ed7793dca8739354235da3d5428f" ]
-  [ "git.dev" "git+https://github.com/mirage/ocaml-git.git#4f00636cb5f5ed7793dca8739354235da3d5428f" ]
-  [ "git-paf.dev" "git+https://github.com/mirage/ocaml-git.git#4f00636cb5f5ed7793dca8739354235da3d5428f" ]
-  [ "git-unix.dev" "git+https://github.com/mirage/ocaml-git.git#4f00636cb5f5ed7793dca8739354235da3d5428f" ]
-  [ "git-mirage.dev" "git+https://github.com/mirage/ocaml-git#4f00636cb5f5ed7793dca8739354235da3d5428f" ]
-  [ "git-kv.dev" "git+https://git.robur.io/robur/git-kv.git#7323b8f065846f85e6733d07f7860d50388a65bb" ]
+  [ "git-kv.dev" "git+https://git.robur.io/robur/git-kv.git#4734261144ea98d0b1aab1c71a800404f055f454" ]
 ]
