@@ -94,4 +94,4 @@ let of_string_json str =
   try match Json.from_string str with
       | Ok v -> Ok (Json.destruct t v)
       | Error _ -> Error (`Msg "Invalid JSON value")
-  with _exn -> Error (`Msg "Invalid contruno value")
+  with exn -> Error (`Msg (Fmt.str "Invalid contruno value: %S" (Printexc.to_string exn)))
