@@ -406,17 +406,13 @@ module Make
     Log.debug (fun m -> m "Compute action: %a" pp_action action) ;
     match action with
     | `Set (hostname, v) ->
-      Store.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
+      Store.set_and_push store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
         (Certificate.to_string_json v)
       >|= R.reword_error (R.msgf "%a" Store.pp_write_error)
       >|= R.failwith_error_msg
-      >>= fun () -> Git_kv.push store
-      >|= R.failwith_error_msg
     | `Delete hostname ->
-      Store.remove store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
+      Store.remove_and_push store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
       >|= R.reword_error (R.msgf "%a" Store.pp_write_error)
-      >|= R.failwith_error_msg
-      >>= fun () -> Git_kv.push store
       >|= R.failwith_error_msg
 
   let sanitize http store cfg stackv4v6 =
@@ -439,9 +435,8 @@ module Make
 
   let set ~ctx remote tree hostname v =
     Git_kv.connect ctx remote >>= fun store ->
-    Store.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname) (Certificate.to_string_json v)
+    Store.set_and_push store Mirage_kv.Key.(empty / Domain_name.to_string hostname) (Certificate.to_string_json v)
     >|= R.reword_error (R.msgf "%a" Store.pp_write_error) >|= R.failwith_error_msg
-    >>= fun () -> Git_kv.push store >|= R.failwith_error_msg
     (* XXX(dinosaure): in this case, we should invalidate the given certificate [v]. *)
     >>= fun _  ->
     ( try Art.remove tree (Art.key (Domain_name.to_string hostname)) with _ -> () );
