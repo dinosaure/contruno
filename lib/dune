@@ -18,7 +18,7 @@
  (name value)
  (public_name contruno.value)
  (modules value)
- (libraries tls rresult irmin ipaddr x509))
+ (libraries tls rresult data-encoding ipaddr x509))
 
 (library
  (name contruno)
@@ -27,8 +27,8 @@
  (libraries
   contruno.certif
   contruno.value
-  irmin-mirage-git
+  git-kv
+  data-encoding
   art
   ipaddr
-  x509
-  irmin))
+  x509))

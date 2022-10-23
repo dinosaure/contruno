@@ -15,6 +15,10 @@ run-test: [ "dune" "runtest" "-p" name "-j" jobs ]
 
 depends: [
   "dune"             {>= "2.9.0"}
-  "irmin-unix"       {>= "3.0.0"}
+  "git-kv"
+  "mirage-clock-unix"
   "contruno"         {= version}
+]
+pin-depends: [
+  [ "git-kv.dev" "git+https://git.robur.io/robur/git-kv.git#d49a406691d207e099d0cbd68624addf51e80519" ]
 ]
