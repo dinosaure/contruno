@@ -25,6 +25,7 @@ depends: [
   "mirage-stack"
   "mirage-time"
   "data-encoding"
+  "git-kv"
   "paf"              {>= "0.3.0"}
   "paf-le"           {>= "0.3.0"}
   "x509"
