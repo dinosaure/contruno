@@ -174,7 +174,7 @@ let add hostname cert pkey (ip, port) alpn remote ~pass target =
   Git_kv.pull store >>? fun _ ->
   get_certificate_and_pkey ~hostname cert pkey >>? fun own_cert ->
   let v = { Certificate.own_cert; ip; port; alpn; } in
-  Store.set_and_push store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
+  Store.set store Mirage_kv.Key.(empty / Domain_name.to_string hostname)
     (Certificate.to_string_json v) >|= R.reword_error (fun err -> `Write err) >>? fun () ->
   match pass, target with
   | Some pass, Some target -> upgrade ~pass target
