@@ -31,5 +31,5 @@ depends: [
   "x509"
 ]
 pin-depends: [
-  [ "git-kv.dev" "git+https://git.robur.io/robur/git-kv.git#d49a406691d207e099d0cbd68624addf51e80519" ]
+  [ "git-kv.dev" "git+https://git.robur.io/robur/git-kv.git#64fc2402ab2e2f6b5d98bec194df921424f1f012" ]
 ]
