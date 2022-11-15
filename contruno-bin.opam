@@ -19,6 +19,3 @@ depends: [
   "mirage-clock-unix"
   "contruno"         {= version}
 ]
-pin-depends: [
-  [ "git-kv.dev" "git+https://git.robur.io/robur/git-kv.git#d49a406691d207e099d0cbd68624addf51e80519" ]
-]
