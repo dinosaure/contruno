@@ -30,6 +30,3 @@ depends: [
   "paf-le"           {>= "0.3.0"}
   "x509"
 ]
-pin-depends: [
-  [ "git-kv.dev" "git+https://git.robur.io/robur/git-kv.git#64fc2402ab2e2f6b5d98bec194df921424f1f012" ]
-]
