@@ -38,7 +38,6 @@ module Make0
     : [ `read ] Httpaf.Body.t -> [ `write ] Httpaf.Body.t -> unit
     = fun src dst ->
       let rec on_eof () =
-        Httpaf.Body.close_reader src ;
         Httpaf.Body.close_writer dst ;
         L.debug (fun m -> m "Close reader and writer.")
       and on_read buf ~off ~len =
@@ -135,8 +134,7 @@ module Make0
     : H2.Body.Reader.t -> H2.Body.Writer.t -> unit
     = fun src dst ->
       let rec on_eof () =
-        H2.Body.Writer.close dst ;
-        H2.Body.Reader.close src (* XXX(dinosaure): double-close? *)
+        H2.Body.Writer.close dst
       and on_read buf ~off ~len =
         H2.Body.Writer.write_bigstring dst ~off ~len buf ;
         H2.Body.Reader.schedule_read src ~on_eof ~on_read in
