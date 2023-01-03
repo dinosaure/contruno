@@ -248,7 +248,9 @@ module Make
     Store.list store Mirage_kv.Key.empty >>= function
     | Error _ -> Lwt.return []
     | Ok lst ->
-      let f acc (name, kind) = match kind, Result.bind (Domain_name.of_string name) Domain_name.host with
+      let f acc (name, kind) =
+        let name = Mirage_kv.Key.to_string name in
+        match kind, Result.bind (Domain_name.of_string name) Domain_name.host with
         | `Dictionary, _ -> Lwt.return acc
         | `Value, Error _ -> Lwt.return acc
         | `Value, Ok hostname ->
@@ -267,7 +269,9 @@ module Make
     Store.list store Mirage_kv.Key.empty >>= function
     | Error _ -> Lwt.return_unit
     | Ok lst ->
-      let f acc (name, kind) = match kind, Result.bind (Domain_name.of_string name) Domain_name.host with
+      let f acc (name, kind) =
+        let name = Mirage_kv.Key.to_string name in
+        match kind, Result.bind (Domain_name.of_string name) Domain_name.host with
         | `Dictionary, _ -> Lwt.return acc
         | `Value, Error _ -> Lwt.return acc
         | `Value, Ok hostname ->
