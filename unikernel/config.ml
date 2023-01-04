@@ -57,7 +57,7 @@ let git =
 let packages =
   [ package "contruno" ~pin:"git+https://github.com/dinosaure/contruno.git"
   ; package "paf" ~min:"0.3.0"
-  ; package "git-kv" ~pin:"git+https://git.robur.io/robur/git-kv.git#d49a406691d207e099d0cbd68624addf51e80519"
+  ; package "git-kv"
   ; package "paf-le" ]
 
 let () =
