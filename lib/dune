@@ -8,7 +8,7 @@
   dns-client.mirage
   contruno.value
   paf.mirage
-  paf-le
+  letsencrypt-mirage
   tcpip
   mirage-clock
   mirage-time

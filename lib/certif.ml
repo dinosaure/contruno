@@ -1,7 +1,7 @@
 open Rresult
 open Lwt.Infix
 
-let ( >>? ) = Lwt_result.bind
+module Log = (val (Logs.src_log (Logs.Src.create "contruno.certif")))
 
 module Make
   (Random : Mirage_random.S)
@@ -10,17 +10,9 @@ module Make
   (Pclock : Mirage_clock.PCLOCK)
   (Stack : Tcpip.Stack.V4V6)
 = struct
-  module DNS = Dns_client_mirage.Make (Random) (Time) (Mclock) (Pclock) (Stack)
   module Let = LE.Make (Time) (Stack)
   module Nss = Ca_certs_nss.Make (Pclock)
   module Paf = Paf_mirage.Make (Stack.TCP)
-  module Log = (val (Logs.src_log (Logs.Src.create "contruno.certif")))
-
-  let authenticator = R.failwith_error_msg (Nss.authenticator ())
-
-  let gethostbyname dns domain_name =
-    DNS.gethostbyname dns domain_name >>? fun ipv4 ->
-    Lwt.return_ok (Ipaddr.V4 ipv4)
 
   let pp_server_error ppf = function
     | `Bad_gateway -> Fmt.pf ppf "Bad gateway"
@@ -52,7 +44,7 @@ module Make
   ;;
 
   let get_certificate
-    ?(tries= 10) ~stop ?(production= false) ~hostname ?email ?account_seed ?certificate_seed stackv4v6 =
+    ?(tries= 10) ~stop ?(production= false) ~hostname ?email ?account_seed ?certificate_seed alpn =
     let cfg =
       { Let.hostname
       ; Let.email= email
@@ -62,10 +54,7 @@ module Make
       ; Let.certificate_seed
       ; Let.certificate_key_type= `RSA
       ; Let.certificate_key_bits= Some 4096 } in
-    let ctx = Let.ctx
-      ~gethostbyname ~authenticator
-      (DNS.create stackv4v6) stackv4v6 in
-    Let.provision_certificate ~tries ~production cfg ctx >>= fun certificates ->
+    Let.provision_certificate ~tries ~production cfg alpn >>= fun certificates ->
     Lwt_switch.turn_off stop >>= fun () -> Lwt.return certificates
 
   let get_certificate_for http
@@ -75,12 +64,13 @@ module Make
     -> ?email:Emile.mailbox
     -> ?account_seed:string
     -> ?certificate_seed:string
+    -> Http_mirage_client.t
     -> Stack.t
     -> (Tls.Config.own_cert, [> `Certificate_unavailable_for of [ `host ] Domain_name.t ]) result Lwt.t
     = fun ?(tries= 10)
           ?production ~hostname
           ?email ?account_seed ?certificate_seed
-          stackv4v6 ->
+          alpn stackv4v6 ->
     Log.debug (fun m -> m "Launch a HTTP service to (re-)ask a certificate for: %a (tries: %d)"
       Domain_name.pp hostname tries) ;
     Lwt.catch begin fun () ->
@@ -93,7 +83,7 @@ module Make
       Lwt.both th
         (get_certificate ~tries ~stop ?production ~hostname
          ?email ?account_seed ?certificate_seed
-         stackv4v6)
+         alpn)
     end >>= function
     | ((), (Ok _ as certificate)) -> Lwt.return certificate
     | ((), Error (`Msg err)) ->
@@ -111,7 +101,7 @@ module Make
 
   let thread_for http own_cert ?tries ?production
     ?email ?account_seed ?certificate_seed
-    upgrade stackv4v6 =
+    upgrade alpn stackv4v6 =
       match Value.hostnames_of_own_cert own_cert |> delete_r3_hostname with
       | [] ->
         Log.err (fun m -> m "The given certificate does not have a hostname.") ;
@@ -159,7 +149,7 @@ module Make
           let diff = Int64.of_float diff in
           (fun `Ready -> Time.sleep_ns diff >>= fun () -> get_certificate_for http
             ?tries ?production ~hostname
-            ?email ?account_seed ?certificate_seed stackv4v6 >>= fun new_certificate ->
+            ?email ?account_seed ?certificate_seed alpn stackv4v6 >>= fun new_certificate ->
                      (upgrade new_certificate) >>= fun f -> f `Ready)
         | true, false ->
           Log.debug (fun m -> m "Prepare a thread which will directly do the let's encrypt challenge.") ;
@@ -167,7 +157,7 @@ module Make
             Log.debug (fun m -> m "Start to challenging Let's encrypt for %a!" Domain_name.pp hostname) ;
             get_certificate_for http
             ?tries ?production ~hostname
-            ?email ?account_seed ?certificate_seed stackv4v6 >>= fun new_certificate ->
+            ?email ?account_seed ?certificate_seed alpn stackv4v6 >>= fun new_certificate ->
                     (upgrade new_certificate) >>= fun f -> f `Ready)
         | false, false ->
           Log.err (fun m -> m "Creation (%a) and expiration (%a) of the given certificate are wrong."

@@ -32,6 +32,10 @@ let certificate_seed =
   let doc = Key.Arg.info ~doc:"Let's encrypt certificate seed." [ "certificate-seed" ] in
   Key.(create "certificate_seed" Arg.(opt (some string) None doc))
 
+let nameservers =
+  let doc = Key.Arg.info ~doc:"Nameservers used to do Let's encrypt HTTP requests." [ "nameservers" ] in
+  Key.(create "nameservers" Arg.(opt (list string) [ "tcp:8.8.8.8" ] doc))
+
 let contruno =
   foreign "Unikernel.Make"
     ~keys:[ Key.v remote
@@ -40,27 +44,28 @@ let contruno =
           ; Key.v email
           ; Key.v account_seed
           ; Key.v certificate_seed ]
-    (random @-> time @-> mclock @-> pclock @-> stackv4v6 @-> git_client @-> job)
+    (random @-> time @-> mclock @-> pclock @-> stackv4v6 @-> alpn_client @-> git_client @-> job)
 
 let random = default_random
 let mclock = default_monotonic_clock
 let pclock = default_posix_clock
 let time = default_time
 let stack = generic_stackv4v6 default_network
+let dns = generic_dns_client ~nameservers stack
+let happy_eyeballs = mimic_happy_eyeballs stack dns (generic_happy_eyeballs stack dns)
+let alpn = paf_client (tcpv4v6_of_stackv4v6 stack) happy_eyeballs 
 
 let git =
-  let dns_client = generic_dns_client stack in
-  let git = git_happy_eyeballs stack dns_client (generic_happy_eyeballs stack dns_client) in
   let tcp = tcpv4v6_of_stackv4v6 stack in
-  git_ssh ~key:ssh_key ~authenticator:ssh_auth tcp git
+  git_ssh ~key:ssh_key ~authenticator:ssh_auth tcp happy_eyeballs
 
 let packages =
-  [ package "contruno" ~pin:"git+https://github.com/dinosaure/contruno.git"
+  [ package "contruno"
   ; package "paf" ~min:"0.3.0"
   ; package "git-kv"
-  ; package "paf-le" ]
+  ; package "letsencrypt-mirage" ]
 
 let () =
   register "contruno"
     ~packages
-    [ contruno $ random $ time $ mclock $ pclock $ stack $ git ]
+    [ contruno $ random $ time $ mclock $ pclock $ stack $ alpn $ git ]

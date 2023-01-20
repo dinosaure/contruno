@@ -14,7 +14,7 @@ build: [ "dune" "build" "-p" name "-j" jobs ]
 run-test: [ "dune" "runtest" "-p" name "-j" jobs ]
 
 depends: [
-  "dune"             {>= "2.9.0"}
+  "dune"               {>= "2.9.0"}
   "art"
   "ca-certs-nss"
   "dns-client"
@@ -25,8 +25,8 @@ depends: [
   "mirage-stack"
   "mirage-time"
   "data-encoding"
-  "git-kv"           {>= "0.0.3"}
-  "paf"              {>= "0.3.0"}
-  "paf-le"           {>= "0.3.0"}
+  "git-kv"             {>= "0.0.3"}
+  "paf"                {>= "0.3.0"}
+  "letsencrypt-mirage" {>= "0.3.0"}
   "x509"
 ]

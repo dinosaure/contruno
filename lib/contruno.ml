@@ -249,10 +249,12 @@ module Make
     | Error _ -> Lwt.return []
     | Ok lst ->
       let f acc (name, kind) =
-        let name = Mirage_kv.Key.to_string name in
+        let name = Mirage_kv.Key.basename name in
         match kind, Result.bind (Domain_name.of_string name) Domain_name.host with
         | `Dictionary, _ -> Lwt.return acc
-        | `Value, Error _ -> Lwt.return acc
+        | `Value, Error _ ->
+          Log.warn (fun m -> m "Invalid domain-name for: %S" name) ;
+          Lwt.return acc
         | `Value, Ok hostname ->
           Log.debug (fun m -> m "Aggregate %a." Domain_name.pp hostname) ;
           Store.get store Mirage_kv.Key.(empty / name)
@@ -365,7 +367,7 @@ module Make
     List.filter (fun (_, r3') ->
       not (Domain_name.equal r3' r3))
 
-  let reasking_certificate http tree cfg invalid_certificate stackv4v6 =
+  let reasking_certificate http tree cfg invalid_certificate alpn stackv4v6 =
     let { production; email; account_seed; certificate_seed; } = cfg in
     let hostname =
       Certificate.hostnames_of_own_cert invalid_certificate.Certificate.own_cert
@@ -374,7 +376,7 @@ module Make
       | [ `Strict, hostname ] -> hostname
       | _ -> assert false in
     Certif.get_certificate_for http ~tries:10
-      ~production ~hostname ?email ?account_seed ?certificate_seed stackv4v6 >>= function
+      ~production ~hostname ?email ?account_seed ?certificate_seed alpn stackv4v6 >>= function
     | Ok `None ->
       Log.warn (fun m -> m "We did not got a certificate for %a." Domain_name.pp hostname);
       Lwt.return (`Delete hostname) (* TODO *)
@@ -403,8 +405,8 @@ module Make
     | `Delete hostname ->
       Fmt.pf ppf "Delete certificate of %a" Domain_name.pp hostname
 
-  let reasking_and_upgrade store http tree cfg v stackv4v6 =
-    reasking_certificate http tree cfg v stackv4v6 >>= fun action ->
+  let reasking_and_upgrade store http tree cfg v alpn stackv4v6 =
+    reasking_certificate http tree cfg v alpn stackv4v6 >>= fun action ->
     Log.debug (fun m -> m "Compute action: %a" pp_action action) ;
     match action with
     | `Set (hostname, v) ->
@@ -417,8 +419,9 @@ module Make
       >|= R.reword_error (R.msgf "%a" Store.pp_write_error)
       >|= R.failwith_error_msg
 
-  let sanitize http store cfg stackv4v6 =
+  let sanitize http store cfg alpn stackv4v6 =
     aggregate_certificates store >>= fun certificates ->
+    Log.debug (fun m -> m "Got %d certificate(s)." (List.length certificates));
     let now = Ptime.v (Pclock.now_d_ps ()) in
     let valids, invalids = List.partition (valids_and_invalids ~now) certificates in
     Log.debug (fun m -> m "%d invalid certificate(s) and %d valid certificate(s)."
@@ -430,7 +433,7 @@ module Make
         | _ -> assert false in
       Art.insert tree (Art.key (Domain_name.to_string hostname)) v) valids ;
     Lwt_list.iter_s
-      (fun v -> reasking_and_upgrade store http tree cfg v stackv4v6) invalids >>= fun () ->
+      (fun v -> reasking_and_upgrade store http tree cfg v alpn stackv4v6) invalids >>= fun () ->
     Lwt.return tree
 
   let _tls_edn, tls_protocol = Mimic.register ~name:"tls-with-reneg" (module TLS)
@@ -445,20 +448,20 @@ module Make
     Art.insert tree (Art.key (Domain_name.to_string hostname)) v ;
     Lwt.return_unit
 
-  let rec create_upgrader http conns tree ~ctx ~remote cfg stackv4v6 =
+  let rec create_upgrader http conns tree ~ctx ~remote cfg alpn stackv4v6 =
     fun (hostname : Art.key) old_certificate : ([ `Ready ] -> unit Lwt.t) Lwt.t ->
     let { production; email; account_seed; certificate_seed; } = cfg in
     Log.debug (fun m -> m "We create a certificate upgrader for %s." (hostname :> string)) ;
-    let f = upgrade_and_renegociate http conns tree ~ctx ~remote cfg stackv4v6 hostname old_certificate in
+    let f = upgrade_and_renegociate http conns tree ~ctx ~remote cfg alpn stackv4v6 hostname old_certificate in
     try
       let fn = Certif.thread_for http
         old_certificate.Certificate.own_cert
-        ~production ?email ?account_seed ?certificate_seed f stackv4v6 in
+        ~production ?email ?account_seed ?certificate_seed f alpn stackv4v6 in
       Lwt.return fn
     with exn ->
       Log.err (fun m -> m "Got an error for %s: %S" (hostname :> string) (Printexc.to_string exn)) ;
       Lwt.return (fun `Ready -> Lwt.return_unit)
-  and upgrade_and_renegociate http conns tree ~ctx ~remote cfg stackv4v6 hostname old_certificate
+  and upgrade_and_renegociate http conns tree ~ctx ~remote cfg alpn stackv4v6 hostname old_certificate
     new_certificate : ([ `Ready ] -> unit Lwt.t) Lwt.t = match new_certificate with
     | Ok (#Certificate.own_cert as own_cert) ->
       ( try Art.remove tree hostname with _ -> () ) ;
@@ -468,7 +471,7 @@ module Make
           alpn= old_certificate.Certificate.alpn; } in
       renegociation tree conns >>= fun () ->
       set ~ctx remote tree (Domain_name.of_string_exn (hostname :> string)) v >>= fun () ->
-      create_upgrader http conns tree ~ctx ~remote cfg stackv4v6 hostname v
+      create_upgrader http conns tree ~ctx ~remote cfg alpn stackv4v6 hostname v
     | Error (`Msg err) ->
       Log.err (fun m -> m "Got an error for %s when we re-asking a new certificate: %s." (hostname :> string) err) ;
       Lwt.return (fun `Ready -> Lwt.return_unit)
@@ -485,18 +488,18 @@ module Make
   type upgrader =
     [ `Upgrader of Art.key -> Certificate.t -> ([ `Ready ] -> unit Lwt.t) Lwt.t ]
 
-  let initialize http ~ctx ~remote cfg stackv4v6 =
+  let initialize http ~ctx ~remote cfg alpn stackv4v6 =
     Git_kv.connect ctx remote >>= fun store -> 
     Log.debug (fun m -> m "Start to sanitize TLS certificates.") ;
-    sanitize http store cfg stackv4v6 >>= fun tree ->
+    sanitize http store cfg alpn stackv4v6 >>= fun tree ->
     Log.debug (fun m -> m "TLS certificates sanitized.") ;
     let conns = Hashtbl.create 0x1000 in
     let f (hostname : Art.key) v acc =
       let hostname' = Domain_name.(host_exn (of_string_exn (hostname :> string))) in
-      (hostname', create_upgrader http conns tree ~ctx ~remote cfg stackv4v6 hostname v) :: acc in
+      (hostname', create_upgrader http conns tree ~ctx ~remote cfg alpn stackv4v6 hostname v) :: acc in
     let ths = Art.iter ~f [] tree in
     let upgrader hostname v =
-      create_upgrader http conns tree ~ctx ~remote cfg stackv4v6 hostname v in
+      create_upgrader http conns tree ~ctx ~remote cfg alpn stackv4v6 hostname v in
     Lwt.return (conns, tree, ths, `Upgrader upgrader)
 
   let info =

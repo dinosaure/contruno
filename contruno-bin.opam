@@ -17,5 +17,6 @@ depends: [
   "dune"             {>= "2.9.0"}
   "git-kv"
   "mirage-clock-unix"
+  "git-unix"
   "contruno"         {= version}
 ]

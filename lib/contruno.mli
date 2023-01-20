@@ -39,6 +39,7 @@ module Make
     :  Lwt_mutex.t
     -> Git_kv.t
     -> cfg
+    -> Http_mirage_client.t
     -> Stack.t
     -> Certificate.t Art.t Lwt.t
 
@@ -52,6 +53,7 @@ module Make
     -> ctx:Mimic.ctx
     -> remote:string
     -> cfg
+    -> Http_mirage_client.t
     -> Stack.t
     -> ((Ipaddr.t * int, flow) Hashtbl.t
         * Certificate.t Art.t
@@ -65,6 +67,7 @@ module Make
     -> ctx:Mimic.ctx
     -> remote:string
     -> cfg
+    -> Http_mirage_client.t
     -> Stack.t
     -> Art.key
     -> Certificate.t

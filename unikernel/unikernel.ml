@@ -9,6 +9,7 @@ module Make
   (Mclock : Mirage_clock.MCLOCK)
   (Pclock : Mirage_clock.PCLOCK)
   (Stack : Tcpip.Stack.V4V6)
+  (ALPN : Http_mirage_client.S)
   (_ : sig end)
 = struct
   include Contruno.Make (Random) (Time) (Mclock) (Pclock) (Stack)
@@ -62,7 +63,7 @@ module Make
     Lwt.join [ first_fill reneg_ths; launch_jobs (); fill_jobs () ] >>= fun () ->
     Lwt_switch.turn_off https
 
-  let start _random _time () () stackv4v6 ctx =
+  let start _random _time () () stackv4v6 alpn ctx =
     let http = Lwt_mutex.create () in
     let cfg  = { Contruno.production= Key_gen.production ()
                ; email= Option.bind (Key_gen.email ()) (R.to_option <.> Emile.of_string)
@@ -70,7 +71,7 @@ module Make
                ; certificate_seed= Key_gen.certificate_seed () } in
     let remote = Key_gen.remote () in
     let stream, push = Lwt_stream.create () in
-    initialize http ~ctx ~remote cfg stackv4v6
+    initialize http ~ctx ~remote cfg alpn stackv4v6
     >>= fun (conns, tree, reneg_ths, `Upgrader upgrader) ->
     let service = serve conns tree (Stack.tcp stackv4v6) in
     add_hook ~pass:(Key_gen.pass ()) ~ctx ~remote tree push stackv4v6 ;

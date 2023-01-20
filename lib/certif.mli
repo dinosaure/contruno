@@ -13,6 +13,7 @@ module Make
     -> ?email:Emile.mailbox
     -> ?account_seed:string
     -> ?certificate_seed:string
+    -> Http_mirage_client.t
     -> Stack.t
     -> (Tls.Config.own_cert, [> `Certificate_unavailable_for of [ `host ] Domain_name.t ]) result Lwt.t
 
@@ -27,6 +28,7 @@ module Make
     -> ((Tls.Config.own_cert, [> `Certificate_unavailable_for of [ `host ] Domain_name.t
                               |  `Invalid_certificate of Value.own_cert ]) result
         -> ([ `Ready ] -> 'a Lwt.t) Lwt.t)
+    -> Http_mirage_client.t
     -> Stack.t
     -> ([ `Ready ] -> 'a Lwt.t)
   (** [thread_for mutex (certificate, pk) k stack : ([ `Ready ] -> 'a Lwt.t)]
