@@ -5,7 +5,7 @@
  (libraries
   rresult
   ca-certs-nss
-  dns-client.mirage
+  dns-client-mirage
   contruno.value
   paf.mirage
   letsencrypt-mirage
