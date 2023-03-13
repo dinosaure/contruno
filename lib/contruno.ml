@@ -514,7 +514,7 @@ module Make
   let hostname_of_flow flow : [ `host ] Domain_name.t option = match Paf.TLS.epoch flow with
     | Error _ -> None
     | Ok { Tls.Core.own_certificate; _ } ->
-      let hosts = List.map Tls.Core.Cert.hostnames own_certificate in
+      let hosts = List.map X509.Certificate.hostnames own_certificate in
       let hosts = List.fold_left X509.Host.Set.union X509.Host.Set.empty hosts in
       match X509.Host.Set.elements hosts with
       | [] -> None

@@ -25,6 +25,7 @@ depends: [
   "mirage-stack"
   "mirage-time"
   "data-encoding"
+  "tls"                {>= "0.17.0"}
   "git-kv"             {>= "0.0.3"}
   "paf"                {>= "0.3.0"}
   "letsencrypt-mirage" {>= "0.3.0"}
