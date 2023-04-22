@@ -224,7 +224,7 @@ module Make0
       | Ok flow ->
         let conn = H2.Client_connection.create ?config:None
           ~error_handler:http_2_0_error_handler
-          ~push_handler:(http_2_0_push_handler reqd) in
+          ~push_handler:(http_2_0_push_handler reqd) () in
         let dst = H2.Client_connection.request conn request
           ~trailers_handler:(http_2_0_trailers_handler reqd)
           ~error_handler:http_2_0_error_handler
