@@ -12,6 +12,10 @@ let ssh_auth =
   let doc = Key.Arg.info ~doc:"SSH public key of the remote Git endpoint." [ "ssh-auth" ] in
   Key.(create "ssh-auth" Arg.(opt (some string) None doc))
 
+let ssh_pass =
+  let doc = Key.Arg.info ~doc:"SSH password of the remote Git endpoint." [ "ssh-password" ] in
+  Key.(create "ssh-auth" Arg.(opt (some string) None doc))
+
 let pass =
   let doc = Key.Arg.info ~doc:"Pass-phrase to reload the Git repository." [ "pass" ] in
   Key.(create "pass" Arg.(required string doc))
@@ -57,7 +61,7 @@ let alpn = paf_client (tcpv4v6_of_stackv4v6 stack) happy_eyeballs
 
 let git =
   let tcp = tcpv4v6_of_stackv4v6 stack in
-  git_ssh ~key:ssh_key ~authenticator:ssh_auth tcp happy_eyeballs
+  git_ssh ~key:ssh_key ~authenticator:ssh_auth ~password:ssh_pass tcp happy_eyeballs
 
 let packages =
   [ package "contruno"
