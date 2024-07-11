@@ -306,6 +306,7 @@ module Make
     let read { flow; rd; _ } = Lwt_mutex.with_lock rd @@ fun () -> Paf.TLS.read flow
     let write { flow; wr; _ } cs = Lwt_mutex.with_lock wr @@ fun () -> Paf.TLS.write flow cs
     let writev { flow; wr; _ } css = Lwt_mutex.with_lock wr @@ fun () -> Paf.TLS.writev flow css
+    let shutdown { flow; _ } cmd = Paf.TLS.shutdown flow cmd
 
     let close { flow; finalizer; _ } =
       finalizer () ; Paf.TLS.close flow
@@ -354,7 +355,12 @@ module Make
       Lwt_mutex.with_lock flow.TLS.wr @@ fun () ->
       Paf.TLS.reneg ~cert:(`Multiple certs) flow.TLS.flow >>= function
       | Ok () -> Lwt.return_unit
-      | Error err ->
+      | Error (`Msg err) ->
+        let ipaddr, port = flow.TLS.edn in
+        Log.err (fun m -> m "Got an error while renegociation with %a:%d: %s"
+          Ipaddr.pp ipaddr port err) ;
+        TLS.close flow
+      | Error (#Paf.TLS.write_error as err) ->
         let ipaddr, port = flow.TLS.edn in
         Log.err (fun m -> m "Got an error while renegociation with %a:%d: %a"
           Ipaddr.pp ipaddr port Paf.TLS.pp_write_error err) ;
