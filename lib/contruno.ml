@@ -434,10 +434,17 @@ module Make
       (List.length invalids) (List.length valids)) ;
     let tree = Art.make () in
     List.iter (fun ({ Certificate.own_cert; _ } as v) ->
-      let hostname = match Certificate.hostnames_of_own_cert own_cert |> delete_r3_hostname with
-        | [ `Strict, hostname ] -> hostname
-        | _ -> assert false in
-      Art.insert tree (Art.key (Domain_name.to_string hostname)) v) valids ;
+      match Certificate.hostnames_of_own_cert own_cert |> delete_r3_hostname with
+      | [ `Strict, hostname ] ->
+        Art.insert tree (Art.key (Domain_name.to_string hostname)) v
+      | [] -> Log.err (fun m -> m "The given certificate does not have a hostname.")
+      | [ `Wildcard, hostname ] ->
+        Log.err (fun m -> m "The given certificate for %a has a wildcard (only DNS supports that)."
+          Domain_name.pp hostname)
+      | _ :: _ :: _ as lst ->
+        let lst = List.map snd lst in
+        Log.err (fun m -> m "The given certificate handles multiples domains: %a." Fmt.(Dump.list Domain_name.pp) lst))
+      valids;
     Lwt_list.iter_s
       (fun v -> reasking_and_upgrade store http tree cfg v alpn stackv4v6) invalids >>= fun () ->
     Lwt.return tree
