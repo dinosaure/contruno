@@ -22,7 +22,6 @@ depends: [
   "tcpip"
   "mirage-clock"
   "mirage-random"
-  "mirage-stack"
   "mirage-time"
   "data-encoding"
   "tls"                {>= "0.17.0"}
