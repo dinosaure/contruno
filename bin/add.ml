@@ -82,6 +82,11 @@ module SSH = struct
     close_in t.ic ;
     close_out t.oc ;
     Lwt.return_unit
+
+  let shutdown t = function
+    | `read -> close_in t.ic; Lwt.return_unit
+    | `write -> close_out t.oc; Lwt.return_unit
+    | `read_write -> close t
 end
 
 let ssh_edn, ssh_protocol = Mimic.register ~name:"ssh" (module SSH)

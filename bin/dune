@@ -2,4 +2,13 @@
  (name add)
  (package contruno-bin)
  (public_name contruno.add)
- (libraries mirage-clock-unix value fmt.cli logs.cli fmt.tty git-unix git-kv))
+ (libraries
+  logs.fmt
+  ptime.clock.os
+  mirage-clock-unix
+  value
+  fmt.cli
+  logs.cli
+  fmt.tty
+  git-unix
+  git-kv))

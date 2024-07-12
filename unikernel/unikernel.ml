@@ -3,6 +3,84 @@ open Lwt.Infix
 
 let ( <.> ) f g = fun x -> f (g x)
 
+module K = struct
+  open Cmdliner
+
+  let remote =
+    let doc = Arg.info ~doc:"Remote Git repository." [ "r"; "remote" ] in
+    Arg.(required & opt (some string) None doc)
+
+  let pass =
+    let doc = Arg.info ~doc:"Pass-phrase to reload the Git repository." [ "pass" ] in
+    Arg.(required & opt (some string) None doc)
+
+  let production =
+    let doc = Arg.info ~doc:"Let's encrypt production environment." [ "production" ] in
+    Arg.(value & flag doc)
+
+  let cert_seed =
+    let doc = Arg.info ~doc:"Let's encrypt certificate seed." [ "certificate-seed" ] in
+    Arg.(value & opt (some string) None doc)
+
+  let cert_key_type =
+    let doc = Arg.info ~doc:"Certificate key type." [ "certificate-key-type" ] in
+    Arg.(value & opt (enum X509.Key_type.strings) `RSA doc)
+
+  let cert_bits =
+    let doc = Arg.info ~doc:"Certificate public key bits." [ "certificate-bits" ] in
+    Arg.(value & opt int 4096 doc)
+
+  let account_seed =
+    let doc = Arg.info ~doc:"Let's encrypt account seed." [ "account-seed" ] in
+    Arg.(value & opt (some string) None doc)
+
+  let account_key_type =
+    let doc = Arg.info ~doc:"Account key type." [ "account-key-type" ] in
+    Arg.(value & opt (enum X509.Key_type.strings) `RSA doc)
+
+  let account_bits =
+    let doc = Arg.info ~doc:"Account public key bits." [ "account-bits" ] in
+    Arg.(value & opt int 4096 doc)
+
+  let email =
+    let doc = Arg.info ~doc:"Let's encrypt E-Mail." [ "email" ] in
+    Arg.(value & opt (some string) None doc)
+
+  type t =
+    { remote : string
+    ; production : bool
+    ; cert_seed : string option
+    ; cert_key_type : X509.Key_type.t
+    ; cert_bits : int
+    ; email : string option
+    ; account_seed : string option
+    ; account_key_type : X509.Key_type.t
+    ; account_bits : int
+    ; pass : string }
+
+  let v remote pass production cert_seed cert_key_type cert_bits account_seed
+    account_key_type account_bits email =
+    { remote
+    ; production
+    ; cert_seed
+    ; cert_key_type
+    ; cert_bits
+    ; account_seed
+    ; account_key_type
+    ; account_bits
+    ; email
+    ; pass }
+
+  let setup =
+    Term.(const v
+          $ remote
+          $ pass
+          $ production
+          $ cert_seed $ cert_key_type $ cert_bits
+          $ account_seed $ account_key_type $ account_bits
+          $ email)
+end
+
 module Make
   (Random : Mirage_random.S)
   (Time : Mirage_time.S)
@@ -63,18 +141,18 @@ module Make
     Lwt.join [ first_fill reneg_ths; launch_jobs (); fill_jobs () ] >>= fun () ->
     Lwt_switch.turn_off https
 
-  let start _random _time () () stackv4v6 alpn ctx =
+  let start _random _time () () stackv4v6 alpn ctx
+    { K.remote; production; cert_seed; account_seed; email; pass; _ } =
     let http = Lwt_mutex.create () in
-    let cfg  = { Contruno.production= Key_gen.production ()
-               ; email= Option.bind (Key_gen.email ()) (R.to_option <.> Emile.of_string)
-               ; account_seed= Key_gen.account_seed ()
-               ; certificate_seed= Key_gen.certificate_seed () } in
-    let remote = Key_gen.remote () in
+    let cfg  = { Contruno.production
+               ; email= Option.bind email (R.to_option <.> Emile.of_string)
+               ; account_seed
+               ; certificate_seed= cert_seed } in
     let stream, push = Lwt_stream.create () in
     initialize http ~ctx ~remote cfg alpn stackv4v6
     >>= fun (conns, tree, reneg_ths, `Upgrader upgrader) ->
     let service = serve conns tree (Stack.tcp stackv4v6) in
-    add_hook ~pass:(Key_gen.pass ()) ~ctx ~remote tree push stackv4v6 ;
+    add_hook ~pass ~ctx ~remote tree push stackv4v6 ;
     init ~port:443 stackv4v6 >>= fun stack ->
     let stop = Lwt_switch.create () in
     let `Initialized th = Paf.serve ~stop service stack in
