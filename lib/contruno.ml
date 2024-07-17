@@ -368,16 +368,20 @@ module Make
     let conns = Hashtbl.fold (fun _ conn acc -> conn :: acc) conns [] in
     Lwt_list.iter_p reneg conns
 
-  let delete_r3_hostname =
-    let r3 = Domain_name.(host_exn (of_string_exn "R3")) in
-    List.filter (fun (_, r3') ->
-      not (Domain_name.equal r3' r3))
+  let is_digit = function '0' .. '9' -> true | _ -> false
+
+  let delete_intermediate_certificate =
+    List.filter (fun (_, name) ->
+      let name = Domain_name.to_string name in
+      not (String.length name > 1
+           && name.[0] = 'R'
+           && String.for_all is_digit (String.sub name 1 (String.length name - 1))))
 
   let reasking_certificate http tree cfg invalid_certificate alpn stackv4v6 =
     let { production; email; account_seed; certificate_seed; } = cfg in
     let hostname =
       Certificate.hostnames_of_own_cert invalid_certificate.Certificate.own_cert
-      |> delete_r3_hostname
+      |> delete_intermediate_certificate
       |> function
       | [ `Strict, hostname ] -> hostname
       | _ -> assert false in
@@ -434,7 +438,7 @@ module Make
       (List.length invalids) (List.length valids)) ;
     let tree = Art.make () in
     List.iter (fun ({ Certificate.own_cert; _ } as v) ->
-      match Certificate.hostnames_of_own_cert own_cert |> delete_r3_hostname with
+      match Certificate.hostnames_of_own_cert own_cert |> delete_intermediate_certificate with
       | [ `Strict, hostname ] ->
         Art.insert tree (Art.key (Domain_name.to_string hostname)) v
       | [] -> Log.err (fun m -> m "The given certificate does not have a hostname.")
