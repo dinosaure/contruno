@@ -1,6 +1,8 @@
 open Rresult
 open Lwt.Infix
 
+let ( >>? ) = Lwt_result.bind
+
 module Certificate = Value
 module Log = (val (Logs.src_log (Logs.Src.create "contruno")))
 
@@ -565,6 +567,10 @@ module Make
     | false, true  -> [ "h2" ]
     | false, false -> []
 
+  let open_write_error = function
+    | Ok _ as v -> v
+    | Error #Paf.TLS.write_error as err -> err
+
   let serve conns tree stackv4v6 =
     let handshake tcp =
       let ipaddr, port = Paf.TCP.dst tcp in
@@ -583,7 +589,9 @@ module Make
           ~alpn_protocols:(alpn_protocols tree)
           ~certificates:(`Multiple certchains) () in
         Log.debug (fun m -> m "Upgrade the TCP/IP connection with TLS.") ;
-        Paf.TLS.server_of_flow cfg tcp >>= function
+        begin Lwt.return cfg
+              >>? fun cfg -> Paf.TLS.server_of_flow cfg tcp
+              >|= open_write_error end >>= function
         | Ok flow ->
           ( match hostname_of_flow flow with
           | Some hostname ->
@@ -597,8 +605,10 @@ module Make
             let err = R.msgf "The TLS handshake missing the hostname" in
             Paf.TCP.close tcp >>= fun () -> Lwt.return_error err )
         | Error `Closed -> Lwt.return_error (`Write `Closed)
-        | Error err ->
+        | Error (#Paf.TLS.write_error as err) ->
           let err = R.msgf "%a" TLS.pp_write_error err in
+          Paf.TCP.close tcp >>= fun () -> Lwt.return_error err
+        | Error (`Msg _ as err) ->
           Paf.TCP.close tcp >>= fun () -> Lwt.return_error err in
     let close _ = Lwt.return_unit in
     let server_handler =

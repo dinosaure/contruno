@@ -40,10 +40,10 @@ let cstruct =
 
 let certificate =
   let open Data_encoding in
-  conv X509.Certificate.encode_pem (R.get_ok <.> X509.Certificate.decode_pem) cstruct
+  conv X509.Certificate.encode_pem (R.get_ok <.> X509.Certificate.decode_pem) string
 let private_key =
   let open Data_encoding in
-  conv X509.Private_key.encode_pem (R.get_ok <.> X509.Private_key.decode_pem) cstruct
+  conv X509.Private_key.encode_pem (R.get_ok <.> X509.Private_key.decode_pem) string
 let certchain =
   let open Data_encoding in
   tup2 (list certificate) private_key
