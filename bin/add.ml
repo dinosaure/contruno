@@ -128,7 +128,7 @@ let _10d = Ptime.Span.v (10, 0L)
 let _5d = Ptime.Span.v (5, 0L)
 let prefix = X509.Distinguished_name.[ Relative_distinguished_name.singleton (CN "Contruno") ]
 let cacert_dn = X509.Distinguished_name.(prefix @ [ Relative_distinguished_name.singleton (CN "Ephemeral CA for Contruno") ])
-let cacert_serial_number = Z.zero
+let cacert_serial_number = "\xde\xad\xbe\xef"
 
 let get_certificate_and_pkey ?seed:_ ~hostname cert pkey = match cert, pkey with
   | Some cert, Some pkey when X509.Certificate.supports_hostname cert hostname ->
@@ -219,7 +219,8 @@ let certificate_of_file fpath =
   really_input ic rs 0 ln ;
   close_in ic ;
   let open R in
-  X509.Certificate.decode_pem (Cstruct.of_bytes rs) >>= fun v -> ok (fpath, v)
+  X509.Certificate.decode_pem (Bytes.unsafe_to_string rs)
+  >>= fun v -> ok (fpath, v)
 
 let certificate_as_a_file =
   let parser str = match Fpath.of_string str with
@@ -236,7 +237,8 @@ let private_key_of_file fpath =
   really_input ic rs 0 ln ;
   close_in ic ;
   let open R in
-  X509.Private_key.decode_pem (Cstruct.of_bytes rs) >>= fun v -> ok (fpath, v)
+  X509.Private_key.decode_pem (Bytes.unsafe_to_string rs)
+  >>= fun v -> ok (fpath, v)
 
 let private_key_as_a_file =
   let parser str = match Fpath.of_string str with
