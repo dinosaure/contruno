@@ -124,6 +124,9 @@ module Make0
         Httpaf.Reqd.respond_with_string reqd response contents ;
         Lwt.return_unit
       | Ok flow ->
+        let headers = request.Httpaf.Request.headers in
+        let headers = Httpaf.Headers.add_unless_exists headers "X-Forwarded-Proto" "https" in
+        let request = { request with Httpaf.Request.headers } in
         let dst, conn = Httpaf.Client_connection.request
           ~error_handler:http_1_1_error_handler
           ~response_handler:(http_1_1_response_handler reqd) request in
