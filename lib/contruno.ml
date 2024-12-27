@@ -277,7 +277,7 @@ module Make
     | Error _ -> Lwt.return_unit
     | Ok lst ->
       let f acc (name, kind) =
-        let name = Mirage_kv.Key.to_string name in
+        let name = Mirage_kv.Key.basename name in
         match kind, Result.bind (Domain_name.of_string name) Domain_name.host with
         | `Dictionary, _ -> Lwt.return acc
         | `Value, Error _ -> Lwt.return acc
