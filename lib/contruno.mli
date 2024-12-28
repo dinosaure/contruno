@@ -36,11 +36,9 @@ module Make
     -> unit Lwt.t
 
   val sanitize
-    :  Lwt_mutex.t
-    -> Git_kv.t
+    :  Git_kv.t
     -> cfg
     -> Http_mirage_client.t
-    -> Stack.t
     -> Certificate.t Art.t Lwt.t
 
   val tls_protocol : (endpoint, flow) Mimic.protocol
@@ -49,26 +47,22 @@ module Make
     [ `Upgrader of Art.key -> Certificate.t -> ([ `Ready ] -> unit Lwt.t) Lwt.t ]
 
   val initialize
-    :  Lwt_mutex.t
-    -> ctx:Mimic.ctx
+    :  ctx:Mimic.ctx
     -> remote:string
     -> cfg
     -> Http_mirage_client.t
-    -> Stack.t
     -> ((Ipaddr.t * int, flow) Hashtbl.t
         * Certificate.t Art.t
         * ([ `host ] Domain_name.t * ([ `Ready ] -> unit Lwt.t) Lwt.t) list
         * upgrader) Lwt.t
 
   val create_upgrader
-    :  Lwt_mutex.t
-    -> (Ipaddr.t * int, flow) Hashtbl.t
+    :  (Ipaddr.t * int, flow) Hashtbl.t
     -> Certificate.t Art.t
     -> ctx:Mimic.ctx
     -> remote:string
     -> cfg
     -> Http_mirage_client.t
-    -> Stack.t
     -> Art.key
     -> Certificate.t
     -> ([ `Ready ] -> unit Lwt.t) Lwt.t
@@ -77,7 +71,7 @@ module Make
 
   val init : port:int -> Stack.t -> stack Lwt.t
 
-  val redirect_http : stack Paf.service
+  val serve_http : stack Paf.service
 
   val serve
     :  (Ipaddr.t * int, flow) Hashtbl.t

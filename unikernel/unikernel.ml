@@ -143,20 +143,19 @@ module Make
 
   let start _random _time () () stackv4v6 alpn ctx
     { K.remote; production; cert_seed; account_seed; email; pass; _ } =
-    let http = Lwt_mutex.create () in
+    let stop = Lwt_switch.create () in
+    init ~port:80 stackv4v6 >>= fun http_service ->
+    let `Initialized th_http = Paf.serve ~stop serve_http http_service in
     let cfg  = { Contruno.production
                ; email= Option.bind email (R.to_option <.> Emile.of_string)
                ; account_seed
                ; certificate_seed= cert_seed } in
     let stream, push = Lwt_stream.create () in
-    initialize http ~ctx ~remote cfg alpn stackv4v6
+    initialize ~ctx ~remote cfg alpn
     >>= fun (conns, tree, reneg_ths, `Upgrader upgrader) ->
     let service = serve conns tree (Stack.tcp stackv4v6) in
     add_hook ~pass ~ctx ~remote tree push stackv4v6 ;
-    init ~port:80 stackv4v6 >>= fun http_service ->
     init ~port:443 stackv4v6 >>= fun https_service ->
-    let stop = Lwt_switch.create () in
-    let `Initialized th_http = Paf.serve ~stop redirect_http http_service in
     let `Initialized th_https = Paf.serve ~stop service https_service in
     Lwt.join
       [ launch_reneg_ths ~stop ~upgrader reneg_ths stream
