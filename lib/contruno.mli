@@ -77,6 +77,8 @@ module Make
 
   val init : port:int -> Stack.t -> stack Lwt.t
 
+  val redirect_http : stack Paf.service
+
   val serve
     :  (Ipaddr.t * int, flow) Hashtbl.t
     -> Certificate.t Art.t

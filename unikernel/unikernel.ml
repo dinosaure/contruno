@@ -153,11 +153,14 @@ module Make
     >>= fun (conns, tree, reneg_ths, `Upgrader upgrader) ->
     let service = serve conns tree (Stack.tcp stackv4v6) in
     add_hook ~pass ~ctx ~remote tree push stackv4v6 ;
-    init ~port:443 stackv4v6 >>= fun stack ->
+    init ~port:80 stackv4v6 >>= fun http_service ->
+    init ~port:443 stackv4v6 >>= fun https_service ->
     let stop = Lwt_switch.create () in
-    let `Initialized th = Paf.serve ~stop service stack in
-    Lwt.both
-      (launch_reneg_ths ~stop ~upgrader reneg_ths stream)
-      (Lwt.both th (Stack.listen stackv4v6)) >>= fun ((), ((), ())) ->
-    Lwt.return_unit
+    let `Initialized th_http = Paf.serve ~stop redirect_http http_service in
+    let `Initialized th_https = Paf.serve ~stop service https_service in
+    Lwt.join
+      [ launch_reneg_ths ~stop ~upgrader reneg_ths stream
+      ; th_http
+      ; th_https
+      ; Stack.listen stackv4v6 ]
 end

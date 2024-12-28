@@ -558,6 +558,22 @@ module Make
 
   let init ~port stackv4v6 = Paf.init ~port (Stack.tcp stackv4v6)
 
+  let redirect_http =
+    let error_handler _ ?request:_ _ _ = () in
+    let handler _flow _dst reqd =
+      let open Httpaf in
+      let req = Reqd.request reqd in
+      match Headers.get req.headers "Host" with
+      | None -> ()
+      | Some host ->
+        let location = "https://" ^ host ^ req.target in
+        let headers =
+          Headers.of_list [ "Location", location; "Content-Length", "0" ] in
+        let resp = Response.create ~headers `Moved_permanently in
+        Reqd.respond_with_string reqd resp ""
+    in
+    Paf.http_service ~error_handler handler
+
   let alpn_protocols tree =
     let http_1_1 = ref false and h2 = ref false in
     let f _ { Certificate.alpn; _ } () =
