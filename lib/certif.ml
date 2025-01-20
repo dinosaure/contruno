@@ -41,10 +41,25 @@ module Make
     let body = writer hdrs in
     Httpaf.Body.write_string body internal_server_error_msg ;
     Httpaf.Body.close_writer body
-  ;;
+
+  let request_handler _flow dst reqd =
+    let open Httpaf in
+    let req = Reqd.request reqd in
+    if String.starts_with ~prefix:"/.well-known/acme-challenge/" req.target
+    then Let.request_handler dst reqd
+    else match Headers.get req.headers "Host" with
+      | None -> ()
+      | Some host ->
+        let location = "https://" ^ host ^ req.target in
+        let headers =
+          Headers.of_list [ "Location", location; "Content-Length", "0" ] in
+        let resp = Response.create ~headers `Moved_permanently in
+        Reqd.respond_with_string reqd resp ""
+
+  let serve = Paf.http_service ~error_handler request_handler
 
   let get_certificate
-    ?(tries= 10) ~stop ?(production= false) ~hostname ?email ?account_seed ?certificate_seed alpn =
+    ?(tries= 10) ?(production= false) ~hostname ?email ?account_seed ?certificate_seed alpn =
     let cfg =
       { Let.hostname
       ; Let.email= email
@@ -54,10 +69,9 @@ module Make
       ; Let.certificate_seed
       ; Let.certificate_key_type= `RSA
       ; Let.certificate_key_bits= Some 4096 } in
-    Let.provision_certificate ~tries ~production cfg alpn >>= fun certificates ->
-    Lwt_switch.turn_off stop >>= fun () -> Lwt.return certificates
+    Let.provision_certificate ~tries ~production cfg alpn
 
-  let get_certificate_for http
+  let get_certificate_for
     :  ?tries:int
     -> ?production:bool
     -> hostname:[ `host ] Domain_name.t
@@ -65,28 +79,19 @@ module Make
     -> ?account_seed:string
     -> ?certificate_seed:string
     -> Http_mirage_client.t
-    -> Stack.t
     -> (Tls.Config.own_cert, [> `Certificate_unavailable_for of [ `host ] Domain_name.t ]) result Lwt.t
     = fun ?(tries= 10)
           ?production ~hostname
           ?email ?account_seed ?certificate_seed
-          alpn stackv4v6 ->
+          alpn ->
     Log.debug (fun m -> m "Launch a HTTP service to (re-)ask a certificate for: %a (tries: %d)"
       Domain_name.pp hostname tries) ;
     Lwt.catch begin fun () ->
-    Lwt_mutex.with_lock http @@ begin fun () ->
-      Paf.init ~port:80 (Stack.tcp stackv4v6) >>= fun t ->
-      let request_handler _flow = Let.request_handler in
-      let service = Paf.http_service ~error_handler request_handler in
-      Lwt_switch.with_switch @@ fun stop ->
-      let `Initialized th = Paf.serve ~stop service t in
-      Lwt.both th
-        (get_certificate ~tries ~stop ?production ~hostname
-         ?email ?account_seed ?certificate_seed
-         alpn)
-    end >>= function
-    | ((), (Ok _ as certificate)) -> Lwt.return certificate
-    | ((), Error (`Msg err)) ->
+    get_certificate ~tries ?production ~hostname ?email ?account_seed
+      ?certificate_seed alpn
+    >>= function
+    | Ok _ as certificate -> Lwt.return certificate
+    | Error (`Msg err) ->
       Log.err (fun m -> m "Got an error when we tried to get a new certificate: %s." err) ;
       Lwt.return_error (`Certificate_unavailable_for hostname)
     end @@ fun exn ->
@@ -103,9 +108,9 @@ module Make
            && name.[0] = 'R'
            && String.for_all is_digit (String.sub name 1 (String.length name - 1))))
 
-  let thread_for http own_cert ?tries ?production
+  let thread_for own_cert ?tries ?production
     ?email ?account_seed ?certificate_seed
-    upgrade alpn stackv4v6 =
+    upgrade alpn =
       match Value.hostnames_of_own_cert own_cert |> delete_intermediate_certificate with
       | [] ->
         Log.err (fun m -> m "The given certificate does not have a hostname.") ;
@@ -151,17 +156,17 @@ module Make
             Domain_name.pp hostname) ;
           let diff = Ptime.Span.to_float_s diff *. 1e9 in
           let diff = Int64.of_float diff in
-          (fun `Ready -> Time.sleep_ns diff >>= fun () -> get_certificate_for http
+          (fun `Ready -> Time.sleep_ns diff >>= fun () -> get_certificate_for
             ?tries ?production ~hostname
-            ?email ?account_seed ?certificate_seed alpn stackv4v6 >>= fun new_certificate ->
+            ?email ?account_seed ?certificate_seed alpn >>= fun new_certificate ->
                      (upgrade new_certificate) >>= fun f -> f `Ready)
         | true, false ->
           Log.debug (fun m -> m "Prepare a thread which will directly do the let's encrypt challenge.") ;
           (fun `Ready ->
             Log.debug (fun m -> m "Start to challenging Let's encrypt for %a!" Domain_name.pp hostname) ;
-            get_certificate_for http
+            get_certificate_for
             ?tries ?production ~hostname
-            ?email ?account_seed ?certificate_seed alpn stackv4v6 >>= fun new_certificate ->
+            ?email ?account_seed ?certificate_seed alpn >>= fun new_certificate ->
                     (upgrade new_certificate) >>= fun f -> f `Ready)
         | false, false ->
           Log.err (fun m -> m "Creation (%a) and expiration (%a) of the given certificate are wrong."
