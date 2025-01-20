@@ -114,12 +114,12 @@ module Make
         Log.debug (fun m -> m "Launch a new thread.");
         begin Lwt.async @@ fun () -> th `Ready end ;
         launch_jobs () in
-    let fill_jobs () =
+    let rec fill_jobs () =
       Log.debug (fun m -> m "Waiting for a new certificate.");
       Lwt_stream.get stream >>= function
       | Some (hostname, v) ->
         Log.debug (fun m -> m "Launch a renegociation thread for %a." Domain_name.pp hostname);
-        Lwt_mutex.with_lock mutex @@ fun () ->
+        Lwt_mutex.with_lock mutex begin fun () ->
         if Hashset.mem set hostname
         then ( Log.debug (fun m -> m "A renegociation thread already exists for %a." Domain_name.pp hostname)
              ; Lwt.return_unit )
@@ -127,6 +127,8 @@ module Make
              ; upgrader (Art.unsafe_key (Domain_name.to_string hostname)) v >>= fun th ->
                Lwt_condition.signal condition (`Launch th) ;
                Lwt.return_unit )
+        end >>= fun () ->
+        fill_jobs ()
       | None -> (* XXX(dinosaure): the stream is infinite, we should never stop. *)
         Log.err (fun m -> m "The stream of new certificates was done.");
         Lwt.wakeup_later waker `Stop ;
