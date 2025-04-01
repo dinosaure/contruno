@@ -2,7 +2,7 @@ open Rresult
 open Lwt.Infix
 
 module Certificate = Value
-module Store = Git_kv.Make(Pclock)
+module Store = Git_kv
 
 let rec upgrade ~pass inet_addr =
   let target = Unix.ADDR_INET (inet_addr, 9418) in

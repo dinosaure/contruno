@@ -26,37 +26,53 @@ module Make0
   let _tcp_edn, tcp_protocol = Mimic.register ~name:"local-tcp" (module TCP)
   module R = (val Mimic.repr tcp_protocol)
 
-  module Httpaf_client_connection = struct
-    include Httpaf.Client_connection
+  module H1_Client_connection = struct
+    include H1.Client_connection
 
     let yield_reader _ = assert false
     let next_read_operation t =
-      (next_read_operation t :> [ `Close | `Read | `Yield ])
+      (next_read_operation t :> [ `Close | `Read | `Upgrade | `Yield ])
+    let next_write_operation t =
+      (next_write_operation t :> [ `Close of int | `Upgrade | `Write of Bigstringaf.t Faraday.iovec list | `Yield ])
+  end
+
+  module H2_Client_connection = struct
+    include H2.Client_connection
+  
+    let next_read_operation t =
+      (next_read_operation t :> [ `Close | `Read | `Yield | `Upgrade ])
+  
+    let next_write_operation t =
+      (next_write_operation t
+        :> [ `Close of int
+           | `Write of Bigstringaf.t Faraday.iovec list
+           | `Yield
+           | `Upgrade ])
   end
 
   module L = (val (Logs.src_log (Logs.Src.create "http-handler")))
 
   let transmit
-    : [ `read ] Httpaf.Body.t -> [ `write ] Httpaf.Body.t -> unit
+    : H1.Body.Reader.t -> H1.Body.Writer.t -> unit
     = fun src dst ->
       let rec on_eof () =
-        Httpaf.Body.close_writer dst ;
+        H1.Body.Writer.close dst ;
         L.debug (fun m -> m "Close reader and writer.")
       and on_read buf ~off ~len =
         L.debug (fun m -> m "Transmit: @[<hov>%a@]" (Hxd_string.pp Hxd.default)
           (Bigstringaf.substring buf ~off ~len)) ;
-        Httpaf.Body.write_bigstring dst ~off ~len buf ;
-        Httpaf.Body.schedule_read src ~on_eof ~on_read in
-      Httpaf.Body.schedule_read src ~on_eof ~on_read
+        H1.Body.Writer.write_bigstring dst ~off ~len buf ;
+        H1.Body.Reader.schedule_read src ~on_eof ~on_read in
+      H1.Body.Reader.schedule_read src ~on_eof ~on_read
 
   let http_1_1_response_handler reqd resp src =
-    let dst = Httpaf.Reqd.respond_with_streaming reqd resp in
+    let dst = H1.Reqd.respond_with_streaming reqd resp in
     transmit src dst
 
   let http_1_1_error_handler _err = () (* TODO(dinosaure): retransmit the error to the client. *)
 
   let err_host_not_found reqd =
-    let open Httpaf in
+    let open H1 in
     let contents = "Host not found (this field is required)." in
     let headers = Headers.of_list
       [ "content-type", "text/plain"
@@ -65,7 +81,7 @@ module Make0
     Reqd.respond_with_string reqd response contents
 
   let err_invalid_hostname reqd =
-    let open Httpaf in
+    let open H1 in
     let contents = "Invalid hostname." in
     let headers = Headers.of_list
       [ "content-type", "text/plain"
@@ -74,7 +90,7 @@ module Make0
     Reqd.respond_with_string reqd response contents
 
   let err_host_does_not_exist reqd =
-    let open Httpaf in
+    let open H1 in
     let contents = "Host unavailable." in
     let headers = Headers.of_list
       [ "content-type", "text/plain"
@@ -83,7 +99,7 @@ module Make0
     Reqd.respond_with_string reqd response contents
 
   let err_target_does_not_handle_http_1_1 reqd =
-    let open Httpaf in
+    let open H1 in
     let contents = "Webservice does not handle http/1.1 protocol." in
     let headers = Headers.of_list
       [ "content-type", "text/plain"
@@ -92,11 +108,11 @@ module Make0
     Reqd.respond_with_string reqd response contents
 
   let http_1_1_request_handler stackv4v6 tree peer reqd =
-    let request = Httpaf.Reqd.request reqd in
-    L.debug (fun m -> m "An HTTP/1.1 connection (from %s) with: @[<hov>%a@]." peer Httpaf.Request.pp_hum request) ;
+    let request = H1.Reqd.request reqd in
+    L.debug (fun m -> m "An HTTP/1.1 connection (from %s) with: @[<hov>%a@]." peer H1.Request.pp_hum request) ;
     let certificate =
       let open Rresult.R in
-      Httpaf.Headers.get request.Httpaf.Request.headers "Host"
+      H1.Headers.get request.H1.Request.headers "Host"
       |> of_option ~none:(fun () -> error `Host_not_found)
       >>= fun host -> Domain_name.of_string host |> reword_error (fun _ -> `Invalid_hostname host)
       >>= Domain_name.host |> reword_error (fun _ -> `Invalid_hostname host)
@@ -117,23 +133,23 @@ module Make0
       Stack.TCP.create_connection stackv4v6 (ip, port) >>= function
       | Error _ ->
         let contents = Fmt.str "%a unreachable." Ipaddr.pp ip in
-        let headers = Httpaf.Headers.of_list
+        let headers = H1.Headers.of_list
           [ "content-type", "text/plain"
           ; "content-length", string_of_int (String.length contents) ] in
-        let response = Httpaf.Response.create ~headers `Bad_gateway in
-        Httpaf.Reqd.respond_with_string reqd response contents ;
+        let response = H1.Response.create ~headers `Bad_gateway in
+        H1.Reqd.respond_with_string reqd response contents ;
         Lwt.return_unit
       | Ok flow ->
-        let headers = request.Httpaf.Request.headers in
-        let headers = Httpaf.Headers.add_unless_exists headers "X-Forwarded-Proto" "https" in
-        let request = { request with Httpaf.Request.headers } in
-        let dst, conn = Httpaf.Client_connection.request
+        let headers = request.H1.Request.headers in
+        let headers = H1.Headers.add_unless_exists headers "X-Forwarded-Proto" "https" in
+        let request = { request with H1.Request.headers } in
+        let dst, conn = H1.Client_connection.request
           ~error_handler:http_1_1_error_handler
           ~response_handler:(http_1_1_response_handler reqd) request in
-        transmit (Httpaf.Reqd.request_body reqd) dst ;
+        transmit (H1.Reqd.request_body reqd) dst ;
         (* XXX(dinosaure): we probably [pick] with a [timeout] to be sure
          * that the resource is restricted and released. *)
-        Paf.run (module Httpaf_client_connection) conn (R.T flow)
+        Paf.run (module H1_Client_connection) conn (R.T flow)
 
   let transmit
     : H2.Body.Reader.t -> H2.Body.Writer.t -> unit
@@ -235,7 +251,7 @@ module Make0
           ~error_handler:http_2_0_error_handler
           ~response_handler:(http_2_0_response_handler reqd) in
         transmit (H2.Reqd.request_body reqd) dst ;
-        Paf.run (module H2.Client_connection) conn (R.T flow)
+        Paf.run (module H2_Client_connection) conn (R.T flow)
 end
 
 module Make
@@ -247,7 +263,7 @@ module Make
 = struct
   module Log = (val (Logs.src_log (Logs.Src.create "contruno.unikernel")))
   module Paf = Paf_mirage.Make (Stack.TCP)
-  module Store = Git_kv.Make (Pclock)
+  module Store = Git_kv
 
   let aggregate_certificates store =
     Store.list store Mirage_kv.Key.empty >>= function

@@ -15,8 +15,8 @@ run-test: [ "dune" "runtest" "-p" name "-j" jobs ]
 
 depends: [
   "dune"             {>= "2.9.0"}
-  "git-kv"
+  "git-kv"           {>= "0.1.3"}
   "mirage-clock-unix"
-  "git-unix"
+  "git-unix"         {>= "3.18.0"}
   "contruno"         {= version}
 ]

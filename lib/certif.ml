@@ -10,8 +10,8 @@ module Make
   (Pclock : Mirage_clock.PCLOCK)
   (Stack : Tcpip.Stack.V4V6)
 = struct
-  module Let = LE.Make (Time) (Stack)
-  module Nss = Ca_certs_nss.Make (Pclock)
+  module Let = LE.Make (Stack)
+  module Nss = Ca_certs_nss
   module Paf = Paf_mirage.Make (Stack.TCP)
 
   let pp_server_error ppf = function
@@ -34,16 +34,16 @@ module Make
   let error_handler (ipaddr, port) ?request error writer =
     Log.err (fun m -> m "Got an error from %a:%d: %a."
       Ipaddr.pp ipaddr port pp_server_error error) ;
-    Log.err (fun m -> m "Received request: %a." Fmt.(Dump.option Httpaf.Request.pp_hum) request) ;
-    let hdrs = Httpaf.Headers.of_list @@
+    Log.err (fun m -> m "Received request: %a." Fmt.(Dump.option H1.Request.pp_hum) request) ;
+    let hdrs = H1.Headers.of_list @@
       [ "content-length", string_of_int (String.length internal_server_error_msg)
       ; "connection", "close" ] in
     let body = writer hdrs in
-    Httpaf.Body.write_string body internal_server_error_msg ;
-    Httpaf.Body.close_writer body
+    H1.Body.Writer.write_string body internal_server_error_msg ;
+    H1.Body.Writer.close body
 
   let request_handler _flow dst reqd =
-    let open Httpaf in
+    let open H1 in
     let req = Reqd.request reqd in
     if String.starts_with ~prefix:"/.well-known/acme-challenge/" req.target
     then Let.request_handler dst reqd
