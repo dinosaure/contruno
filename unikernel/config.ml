@@ -53,7 +53,7 @@ let packages =
   [
     package "contruno";
     package "paf" ~min:"0.3.0";
-    package "h1"
+    package "h1";
     package "git-kv" ~min:"0.1.3";
     package "letsencrypt-mirage";
   ]
