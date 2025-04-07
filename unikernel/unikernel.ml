@@ -82,15 +82,11 @@ module K = struct
 end
 
 module Make
-  (Random : Mirage_random.S)
-  (Time : Mirage_time.S)
-  (Mclock : Mirage_clock.MCLOCK)
-  (Pclock : Mirage_clock.PCLOCK)
   (Stack : Tcpip.Stack.V4V6)
   (ALPN : Http_mirage_client.S)
   (_ : sig end)
 = struct
-  include Contruno.Make (Random) (Time) (Mclock) (Pclock) (Stack)
+  include Contruno.Make (Stack)
   module Log = (val (Logs.src_log (Logs.Src.create "contruno.main")))
 
   (* XXX(dinosaure): [add_hook] fills a stream with what it's upgraded from the Git
@@ -143,7 +139,7 @@ module Make
     Lwt.join [ first_fill reneg_ths; launch_jobs (); fill_jobs () ] >>= fun () ->
     Lwt_switch.turn_off https
 
-  let start _random _time () () stackv4v6 alpn ctx
+  let start stackv4v6 alpn ctx
     { K.remote; production; cert_seed; account_seed; email; pass; _ } =
     let stop = Lwt_switch.create () in
     init ~port:80 stackv4v6 >>= fun http_service ->

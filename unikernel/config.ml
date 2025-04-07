@@ -2,24 +2,6 @@ open Mirage
 
 let setup = runtime_arg ~pos:__POS__ "Unikernel.K.setup"
 
-let ssh_key =
-  Runtime_arg.create ~pos:__POS__
-    {|let open Cmdliner in
-      let doc = Arg.info ~doc:"The private SSH key (rsa:<seed> or ed25519:<b64-key>)." ["ssh-key"] in
-      Arg.(value & opt (some string) None doc)|}
-
-let ssh_authenticator =
-  Runtime_arg.create ~pos:__POS__
-    {|let open Cmdliner in
-      let doc = Arg.info ~doc:"SSH authenticator." ["ssh-auth"] in
-      Arg.(value & opt (some string) None doc)|}
-
-let ssh_password =
-  Runtime_arg.create ~pos:__POS__
-    {|let open Cmdliner in
-      let doc = Arg.info ~doc:"The private SSH password." [ "ssh-password" ] in
-      Arg.(value & opt (some string) None doc)|}
-
 let enable_monitoring =
   let doc =
     Key.Arg.info ~doc:"Enable monitoring (only available for Solo5 targets)"
@@ -47,7 +29,7 @@ let monitoring =
   impl ~packages:[ package "mirage-monitoring" ]
     ~runtime_args:[ name; monitor ]
     ~connect "Mirage_monitoring.Make"
-    (time @-> pclock @-> stackv4v6 @-> job)
+    (sleep  @-> ptime @-> stackv4v6 @-> job)
 
 let packages =
   [
@@ -62,12 +44,10 @@ let contruno =
   main "Unikernel.Make"
     ~runtime_args:[ setup ]
     ~packages
-    (random @-> time @-> mclock @-> pclock @-> stackv4v6 @-> alpn_client @-> git_client @-> job)
+    (stackv4v6 @-> alpn_client @-> git_client @-> job)
 
-let random = default_random
-let mclock = default_monotonic_clock
-let pclock = default_posix_clock
-let time = default_time
+let ptime = default_ptime
+let sleep = default_sleep
 let stack = generic_stackv4v6 default_network
 let he = generic_happy_eyeballs stack
 let dns = generic_dns_client stack he
@@ -85,14 +65,14 @@ let monitor_stack =
 let git =
   let git = mimic_happy_eyeballs stack he dns in
   let tcp = tcpv4v6_of_stackv4v6 stack in
-  git_ssh ~key:ssh_key ~authenticator:ssh_authenticator ~password:ssh_password tcp git
+  git_ssh tcp git
 
-let optional_monitoring time pclock stack =
+let optional_monitoring sleep ptime stack =
   if_impl (Key.value enable_monitoring)
-    (monitoring $ time $ pclock $ stack)
+    (monitoring $ sleep $ ptime $ stack)
     noop
 
 let () =
   register "contruno"
-    [ optional_monitoring default_time default_posix_clock monitor_stack
-    ; contruno $ random $ time $ mclock $ pclock $ stack $ alpn $ git ]
+    [ optional_monitoring default_sleep default_ptime monitor_stack
+    ; contruno $ stack $ alpn $ git ]

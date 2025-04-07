@@ -3,13 +3,7 @@ open Lwt.Infix
 
 module Log = (val (Logs.src_log (Logs.Src.create "contruno.certif")))
 
-module Make
-  (Random : Mirage_random.S)
-  (Time : Mirage_time.S)
-  (Mclock : Mirage_clock.MCLOCK)
-  (Pclock : Mirage_clock.PCLOCK)
-  (Stack : Tcpip.Stack.V4V6)
-= struct
+module Make (Stack : Tcpip.Stack.V4V6) = struct
   module Let = LE.Make (Stack)
   module Nss = Ca_certs_nss
   module Paf = Paf_mirage.Make (Stack.TCP)
@@ -140,7 +134,7 @@ module Make
                if Ptime.is_earlier until ~than:until'
                then (from, until) else (from', until'))
             acc (List.tl times) in
-        let now = Ptime.v (Pclock.now_d_ps ()) in
+        let now = Mirage_ptime.now () in
         match Ptime.is_earlier from ~than:now, Ptime.is_later until ~than:now with
         | false, true ->
           let diff = Ptime.diff from now in
@@ -148,7 +142,7 @@ module Make
             Domain_name.pp hostname) ;
           let diff = Ptime.Span.to_float_s diff *. 1e9 in
           let diff = Int64.of_float diff in
-          (fun `Ready -> Time.sleep_ns diff >>= fun () ->
+          (fun `Ready -> Mirage_sleep.ns diff >>= fun () ->
                   upgrade (Ok (own_cert :> Tls.Config.own_cert)) >>= fun f -> f `Ready)
         | true, true ->
           let diff = Ptime.diff until now in
@@ -156,7 +150,7 @@ module Make
             Domain_name.pp hostname) ;
           let diff = Ptime.Span.to_float_s diff *. 1e9 in
           let diff = Int64.of_float diff in
-          (fun `Ready -> Time.sleep_ns diff >>= fun () -> get_certificate_for
+          (fun `Ready -> Mirage_sleep.ns diff >>= fun () -> get_certificate_for
             ?tries ?production ~hostname
             ?email ?account_seed ?certificate_seed alpn >>= fun new_certificate ->
                      (upgrade new_certificate) >>= fun f -> f `Ready)

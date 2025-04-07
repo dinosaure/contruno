@@ -1,10 +1,4 @@
-module Make
-  (Random : Mirage_random.S)
-  (Time : Mirage_time.S)
-  (Mclock : Mirage_clock.MCLOCK)
-  (Pclock : Mirage_clock.PCLOCK)
-  (Stack : Tcpip.Stack.V4V6)
-: sig
+module Make (Stack : Tcpip.Stack.V4V6) : sig
   val get_certificate_for
     :  ?tries:int
     -> ?production:bool
