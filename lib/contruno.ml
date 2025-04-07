@@ -254,13 +254,7 @@ module Make0
         Paf.run (module H2_Client_connection) conn (R.T flow)
 end
 
-module Make
-  (Random : Mirage_random.S)
-  (Time : Mirage_time.S)
-  (Mclock : Mirage_clock.MCLOCK)
-  (Pclock : Mirage_clock.PCLOCK)
-  (Stack : Tcpip.Stack.V4V6)
-= struct
+module Make (Stack : Tcpip.Stack.V4V6) = struct
   module Log = (val (Logs.src_log (Logs.Src.create "contruno.unikernel")))
   module Paf = Paf_mirage.Make (Stack.TCP)
   module Store = Git_kv
@@ -341,8 +335,7 @@ module Make
   type flow = TLS.flow
   type endpoint = TLS.endpoint = |
 
-  module Certif = Certif.Make
-    (Random) (Time) (Mclock) (Pclock) (Stack)
+  module Certif = Certif.Make (Stack)
 
   let valids_and_invalids ~now { Certificate.own_cert; _ } =
     let from, until =
@@ -453,7 +446,7 @@ module Make
   let sanitize store cfg alpn =
     aggregate_certificates store >>= fun certificates ->
     Log.debug (fun m -> m "Got %d certificate(s)." (List.length certificates));
-    let now = Ptime.v (Pclock.now_d_ps ()) in
+    let now = Mirage_ptime.now () in
     let valids, invalids = List.partition (valids_and_invalids ~now) certificates in
     Log.debug (fun m -> m "%d invalid certificate(s) and %d valid certificate(s)."
       (List.length invalids) (List.length valids)) ;
